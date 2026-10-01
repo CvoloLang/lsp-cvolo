@@ -186,7 +186,7 @@ internal sealed partial class CvoloLanguageBackend(
         lock (session.Gate)
         {
             ProjectSnapshot next = AdvanceSnapshot(session, document.DocumentId, text);
-            return new ToolingBackendSnapshot(next, session.Generation);
+            return new ToolingBackendSnapshot(next, session.Generation, session.Navigation);
         }
     }
 
@@ -202,7 +202,7 @@ internal sealed partial class CvoloLanguageBackend(
             // resurrects the project text captured when the language server first opened it.
             SourceText baseline = session.ReadDiskBaseline(document.DocumentId);
             ProjectSnapshot next = AdvanceSnapshot(session, document.DocumentId, baseline.ToString());
-            return new ToolingBackendSnapshot(next, session.Generation);
+            return new ToolingBackendSnapshot(next, session.Generation, session.Navigation);
         }
     }
 
@@ -217,7 +217,7 @@ internal sealed partial class CvoloLanguageBackend(
         if (session.IsPackageSource)
         {
             ProjectSnapshot updated = session.Current.WithDocument(documentId, SourceText.From(text));
-            session.Advance(updated);
+            session.Advance(updated, IsCoherent(updated, documentId));
             return updated;
         }
 
@@ -231,24 +231,52 @@ internal sealed partial class CvoloLanguageBackend(
         {
             CvoloProject advanced = session.Project.Advance(overrides);
             session.SetProject(advanced);
-            session.Advance(advanced.InitialSnapshot);
+            session.Advance(advanced.InitialSnapshot, IsCoherent(advanced.InitialSnapshot, documentId));
             return advanced.InitialSnapshot;
         }
         catch (Exception ex)
         {
             _logger.Write(CoreLogLevel.Debug, $"Library closure advance skipped for '{edited.FilePath}': {ex.Message}");
             ProjectSnapshot next = session.Current.WithDocument(documentId, SourceText.From(text));
-            session.Advance(next);
+            session.Advance(next, IsCoherent(next, documentId));
             return next;
         }
     }
+
+    /// <summary>
+    /// A snapshot is coherent for navigation when the edited document parsed. A parser syntax error
+    /// means the declaration forms the navigation index is built from are, for that instant,
+    /// incomplete or missing, so navigation keeps the previous coherent snapshot while diagnostics
+    /// continue to describe the current text.
+    /// </summary>
+    private static bool IsCoherent(ProjectSnapshot snapshot, DocumentId documentId)
+    {
+        if (!snapshot.TryGetDocument(documentId, out DocumentSnapshot? document))
+            return false;
+
+        foreach (Diagnostic diagnostic in document.GetDiagnostics())
+        {
+            if (IsParserSyntaxError(diagnostic.Id))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The parser's syntax diagnostics, delegated to the tooling so the id catalog stays the single
+    /// source of truth. A semantic error never makes a snapshot incoherent, because a document that
+    /// merely fails to type-check still binds its declarations completely enough to navigate.
+    /// </summary>
+    private static bool IsParserSyntaxError(string diagnosticId) =>
+        ParserSyntaxDiagnostic.IsSyntaxError(diagnosticId);
 
     public BackendSnapshot CaptureCurrentSnapshot(BackendProject project)
     {
         var session = (CvoloProjectSession)project;
         lock (session.Gate)
         {
-            return new ToolingBackendSnapshot(session.Current, session.Generation);
+            return new ToolingBackendSnapshot(session.Current, session.Generation, session.Navigation);
         }
     }
 
@@ -301,7 +329,7 @@ internal sealed partial class CvoloLanguageBackend(
             if (changed)
                 session.Advance(next);
 
-            return new ToolingBackendSnapshot(session.Current, session.Generation);
+            return new ToolingBackendSnapshot(session.Current, session.Generation, session.Navigation);
         }
     }
 
@@ -599,32 +627,47 @@ internal sealed partial class CvoloLanguageBackend(
 
     public BackendSymbolInfo? GetSymbolAtPosition(BackendSnapshot snapshot, BackendDocumentHandle document, int position)
     {
-        var toolingSnapshot = ((ToolingBackendSnapshot)snapshot).Snapshot;
+        var backendSnapshot = (ToolingBackendSnapshot)snapshot;
         var documentId = ((CvoloDocumentHandle)document).DocumentId;
 
-        if (!toolingSnapshot.TryGetDocument(documentId, out DocumentSnapshot? toolingDocument))
+        // Current text is tried first so a symbol under the cursor always reflects what is on
+        // screen. When the current text does not bind (a transient edit), the last coherent
+        // snapshot answers instead, so go-to-definition stays usable while typing. Diagnostics are
+        // never stabilized this way: they always come from the current snapshot.
+        SymbolLookupResult? result = null;
+        ProjectSnapshot? resolvedFrom = null;
+
+        if (backendSnapshot.Snapshot.TryGetDocument(documentId, out DocumentSnapshot? toolingDocument))
         {
-            // A document that is not part of the supplied snapshot is stale relative to it, so the
-            // symbol is simply not resolvable here; a null answer is the honest result (§23).
-            return null;
+            if (position < 0 || position > toolingDocument.Text.Length)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(position),
+                    position,
+                    "The navigation position is outside the captured document text.");
+            }
+
+            result = toolingDocument.GetSymbolAtPosition(position);
+            if (result is not null)
+                resolvedFrom = backendSnapshot.Snapshot;
         }
 
-        if (position < 0 || position > toolingDocument.Text.Length)
+        if (result is null && !ReferenceEquals(backendSnapshot.Navigation, backendSnapshot.Snapshot)
+            && backendSnapshot.Navigation.TryGetDocument(documentId, out DocumentSnapshot? stableDocument)
+            && position >= 0 && position <= stableDocument.Text.Length)
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(position),
-                position,
-                "The navigation position is outside the captured document text.");
+            result = stableDocument.GetSymbolAtPosition(position);
+            if (result is not null)
+                resolvedFrom = backendSnapshot.Navigation;
         }
 
-        SymbolLookupResult? result = toolingDocument.GetSymbolAtPosition(position);
-        if (result is null)
+        if (result is null || resolvedFrom is null)
         {
             return null;
         }
 
         return new BackendSymbolInfo(
-            new CvoloSymbolHandle(toolingSnapshot, result.SymbolId),
+            new CvoloSymbolHandle(resolvedFrom, result.SymbolId),
             new CoreTextSpan(result.SubjectSpan.Start, result.SubjectSpan.Length),
             result.Name,
             MapSymbolKind(result.Kind),
@@ -633,16 +676,29 @@ internal sealed partial class CvoloLanguageBackend(
             MapNativeInterop(result.NativeInterop));
     }
 
+    /// <summary>
+    /// True when <paramref name="candidate"/> is one of the snapshots this backend handed out for
+    /// the same session: the current one, or the retained navigation one. A handle from any other
+    /// snapshot is foreign and must not resolve.
+    /// </summary>
+    private static bool IsSessionSnapshot(ToolingBackendSnapshot snapshot, ProjectSnapshot? candidate) =>
+        ReferenceEquals(candidate, snapshot.Snapshot)
+        || ReferenceEquals(candidate, snapshot.Navigation);
+
     public BackendDefinitionResult GetDefinitions(BackendSnapshot snapshot, BackendSymbolHandle symbol)
     {
-        var toolingSnapshot = ((ToolingBackendSnapshot)snapshot).Snapshot;
-        if (symbol is not CvoloSymbolHandle handle || !ReferenceEquals(handle.Snapshot, toolingSnapshot))
+        var backendSnapshot = (ToolingBackendSnapshot)snapshot;
+        if (symbol is not CvoloSymbolHandle handle || !IsSessionSnapshot(backendSnapshot, handle.Snapshot))
         {
             // A foreign or mismatched symbol handle must never resolve against the
             // wrong snapshot; return no result rather than an unrelated symbol (§15).
             return EmptyDefinitions;
         }
 
+        // The handle carries the snapshot it was resolved from, and definition is answered from
+        // that same snapshot so a symbol found in the retained navigation state keeps navigating
+        // even after the current text moved on.
+        var toolingSnapshot = handle.Snapshot;
         IReadOnlyList<SymbolDefinition> definitions = toolingSnapshot.GetDefinitions(handle.SymbolId);
         IReadOnlyList<PackageSourceDefinition> packageDefinitions = toolingSnapshot.GetPackageSourceDefinitions(handle.SymbolId);
         if (definitions.Count == 0 && packageDefinitions.Count == 0)
@@ -682,10 +738,13 @@ internal sealed partial class CvoloLanguageBackend(
 
     public BackendReferenceResult GetReferences(BackendSnapshot snapshot, BackendSymbolHandle symbol, bool includeDeclaration)
     {
-        var toolingSnapshot = ((ToolingBackendSnapshot)snapshot).Snapshot;
-        if (symbol is not CvoloSymbolHandle handle || !ReferenceEquals(handle.Snapshot, toolingSnapshot))
+        var backendSnapshot = (ToolingBackendSnapshot)snapshot;
+        if (symbol is not CvoloSymbolHandle handle || !IsSessionSnapshot(backendSnapshot, handle.Snapshot))
             return new BackendReferenceResult(new Dictionary<DocumentUri, string>(), []);
 
+        // References are counted against the snapshot the symbol was resolved from, which is what
+        // keeps the reference CodeLens title and Find All References in agreement.
+        var toolingSnapshot = handle.Snapshot;
         IReadOnlyList<SymbolReference> references = toolingSnapshot.GetReferences(handle.SymbolId, includeDeclaration);
         var texts = new Dictionary<DocumentUri, string>();
         var locations = new List<BackendReferenceLocation>(references.Count);
@@ -750,9 +809,12 @@ internal sealed partial class CvoloLanguageBackend(
 
     public IReadOnlyList<BackendDocumentSymbol> GetDocumentSymbols(BackendSnapshot snapshot, BackendDocumentHandle document)
     {
-        var toolingSnapshot = ((ToolingBackendSnapshot)snapshot).Snapshot;
+        var backendSnapshot = (ToolingBackendSnapshot)snapshot;
         var documentId = ((CvoloDocumentHandle)document).DocumentId;
 
+        // The outline is navigation, so it is served from the retained navigation snapshot when the
+        // current text is mid-edit; an unparseable edit must not empty the outline.
+        var toolingSnapshot = backendSnapshot.Navigation;
         if (!toolingSnapshot.TryGetDocument(documentId, out DocumentSnapshot? toolingDocument))
         {
             // A document missing from the supplied snapshot is stale, so it contributes no outline
@@ -1033,6 +1095,32 @@ internal sealed class CvoloProjectSession : BackendProject
 
     public ProjectSnapshot Current { get; private set; }
 
+    /// <summary>
+    /// The most recent snapshot that bound every document it was asked about without a parser
+    /// syntax error. Navigation answers (definition, references, CodeLens, outline) are served from
+    /// this snapshot while <see cref="Current"/> is mid-edit, so a transient keystroke can never make
+    /// them disappear, duplicate or jump. It is replaced atomically by the next coherent snapshot
+    /// and dropped once <see cref="MaxRetainedNavigationAdvances"/> consecutive incoherent advances
+    /// pass, so stale navigation state cannot outlive the edit that produced it.
+    /// </summary>
+    public ProjectSnapshot Navigation => _navigation ?? Current;
+
+    /// <summary>
+    /// True when <see cref="Navigation"/> is a retained snapshot rather than <see cref="Current"/>,
+    /// i.e. the current text is mid-edit and navigation is answering from the last good state.
+    /// </summary>
+    public bool IsNavigationRetained => _navigation is not null;
+
+    /// <summary>
+    /// How many consecutive incoherent snapshot advances may retain an older navigation snapshot
+    /// before it is discarded. Bounds the lifetime of navigation state that no longer matches the
+    /// document, while comfortably covering an in-progress edit.
+    /// </summary>
+    public const int MaxRetainedNavigationAdvances = 32;
+
+    private ProjectSnapshot? _navigation;
+    private int _incoherentAdvances;
+
     public long Generation { get; private set; }
 
     public SourceText ReadDiskBaseline(DocumentId documentId)
@@ -1078,10 +1166,35 @@ internal sealed class CvoloProjectSession : BackendProject
     /// Publishes <paramref name="snapshot"/> as the new current snapshot and
     /// increments the generation. Callers must hold <see cref="Gate"/>.
     /// </summary>
-    public void Advance(ProjectSnapshot snapshot)
+    /// <param name="snapshot">The snapshot that reflects the current text.</param>
+    /// <param name="coherent">
+    /// Whether <paramref name="snapshot"/> bound the edited documents without a parser syntax error.
+    /// A coherent snapshot becomes the navigation snapshot; an incoherent one leaves the previous
+    /// navigation snapshot in place so navigation stays stable across the edit.
+    /// </param>
+    public void Advance(ProjectSnapshot snapshot, bool coherent = true)
     {
         Current = snapshot;
         Generation++;
+
+        if (coherent)
+        {
+            _navigation = snapshot;
+            _incoherentAdvances = 0;
+            return;
+        }
+
+        if (_navigation is null)
+            return;
+
+        _incoherentAdvances++;
+        if (_incoherentAdvances >= MaxRetainedNavigationAdvances)
+        {
+            // The retained snapshot no longer describes the document closely enough to keep
+            // answering navigation from it; fall back to current state until the next clean bind.
+            _navigation = null;
+            _incoherentAdvances = 0;
+        }
     }
 }
 
@@ -1093,9 +1206,16 @@ internal sealed class CvoloDocumentHandle(DocumentId documentId) : BackendDocume
     public DocumentId DocumentId { get; } = documentId;
 }
 
-internal sealed class ToolingBackendSnapshot(ProjectSnapshot snapshot, long generation) : BackendSnapshot
+internal sealed class ToolingBackendSnapshot(ProjectSnapshot snapshot, long generation, ProjectSnapshot? navigation = null) : BackendSnapshot
 {
+    /// <summary>Always reflects the current document text; diagnostics come from here.</summary>
     public ProjectSnapshot Snapshot { get; } = snapshot;
+
+    /// <summary>
+    /// The snapshot navigation answers are served from. Equal to <see cref="Snapshot"/> unless the
+    /// current text is mid-edit and did not parse, in which case it is the last coherent snapshot.
+    /// </summary>
+    public ProjectSnapshot Navigation { get; } = navigation ?? snapshot;
 
     public long Generation { get; } = generation;
 }

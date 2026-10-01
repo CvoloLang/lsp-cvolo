@@ -69,7 +69,8 @@ internal sealed partial class CvoloLanguageBackend
 
     public IReadOnlyList<BackendCodeLensInfo> GetCodeLenses(BackendSnapshot snapshot, BackendDocumentHandle document, BackendCodeLensOptions? options = null)
     {
-        var toolingSnapshot = ((ToolingBackendSnapshot)snapshot).Snapshot;
+        var backendSnapshot = (ToolingBackendSnapshot)snapshot;
+        var toolingSnapshot = backendSnapshot.Navigation;
         if (FindEditorDocument(snapshot, document) is not { } toolingDocument)
             return [];
 
