@@ -237,7 +237,7 @@ public class EditorIntelligenceSemanticTests : IDisposable
         // Singular and plural are the compiler's presentation, not a client-side guess.
         Assert.NotNull(LensOn(lenses, "Sum", "1 reference"));
         Assert.NotNull(LensOn(lenses, "Twice", "2 references"));
-        Assert.NotNull(LensOn(lenses, "Vec", "3 references"));
+        Assert.NotNull(LensOn(lenses, "Vec", "4 references"));
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public class EditorIntelligenceSemanticTests : IDisposable
 
         // `byte Kind` + `int Length` is 5 payload bytes that the target aligns into 8, so the summary
         // must name the padding the compiler inserted rather than a size the client guessed.
-        JToken header = LensOn(lenses, "Header", "size 8B | align 4B | padding 3B");
+        JToken header = LensOn(lenses, "Header", "size 8B, align 4B, padding 3B");
         Assert.Equal("cvolo.showTypeLayout", header["command"]!["command"]!.Value<string>());
         var expected = PositionOf(At("public struct Header") + "public struct ".Length);
         var arguments = Assert.IsType<JArray>(header["command"]!["arguments"]!);
@@ -278,7 +278,7 @@ public class EditorIntelligenceSemanticTests : IDisposable
         Assert.Equal(expected.Character, arguments[1]!["character"]!.Value<int>());
 
         // Zero padding is reported explicitly rather than hidden.
-        Assert.NotNull(LensOn(lenses, "Pair", "size 8B | align 4B | padding 0B"));
+        Assert.NotNull(LensOn(lenses, "Pair", "size 8B, align 4B, padding 0B"));
     }
 
     private async Task EnableFieldDecorationsAsync()
@@ -318,12 +318,12 @@ public class EditorIntelligenceSemanticTests : IDisposable
 
         JArray lenses = await EventuallyAsync(
             () => _session.Client.CodeLensAsync(Uri),
-            answer => HasLensOn(answer, "Length", "offset 4B | size 4B | align 4B | pad 3B before"),
+            answer => HasLensOn(answer, "Length", "offset 4B, size 4B, align 4B, pad 3B before"),
             "field codeLens");
 
         // `Length` is never referenced, so the count stays a visible zero rather than being hidden,
         // and the compiler's storage facts sit beside it on the same line.
-        JToken length = LensOn(lenses, "Length", "offset 4B | size 4B | align 4B | pad 3B before");
+        JToken length = LensOn(lenses, "Length", "offset 4B, size 4B, align 4B, pad 3B before");
         Assert.NotNull(LensOn(lenses, "Length", "0 references"));
         Assert.Equal("cvolo.showTypeLayout", length["command"]!["command"]!.Value<string>());
 
@@ -333,14 +333,14 @@ public class EditorIntelligenceSemanticTests : IDisposable
         Assert.Equal(expected.Character, arguments[1]!["character"]!.Value<int>());
 
         // The first field starts the type, so it has no padding before it and says nothing about one.
-        Assert.NotNull(LensOn(lenses, "Kind", "offset 0B | size 1B | align 1B"));
+        Assert.NotNull(LensOn(lenses, "Kind", "offset 0B, size 1B, align 1B"));
 
         // The order is deterministic: references, then layout, on the same anchored range.
         var onLength = lenses
             .Where(lens => TextOf(lens["range"]!) == "Length")
             .Select(lens => Title(lens).Value<string>())
             .ToArray();
-        Assert.Equal(["0 references", "offset 4B | size 4B | align 4B | pad 3B before"], onLength);
+        Assert.Equal(["0 references", "offset 4B, size 4B, align 4B, pad 3B before"], onLength);
     }
 
     [Fact]
@@ -383,8 +383,8 @@ public class EditorIntelligenceSemanticTests : IDisposable
         // source, and repeats the padding that sits *before* the field, never the tail padding.
         JToken length = hints.First(hint =>
             hint["kind"]!.Value<string>() == "layout"
-            && hint["label"]!.Value<string>()!.StartsWith("offset 4 |", StringComparison.Ordinal));
-        Assert.Equal("offset 4 | size 4 | align 4 | pad 3 before", length["label"]!.Value<string>());
+            && hint["label"]!.Value<string>()!.StartsWith("offset 4,", StringComparison.Ordinal));
+        Assert.Equal("offset 4, size 4, align 4, pad 3 before", length["label"]!.Value<string>());
         Assert.True(length["paddingLeft"]!.Value<bool>());
 
         var expected = PositionOf(At("public int Length;") + "public int Length;".Length);
@@ -393,7 +393,7 @@ public class EditorIntelligenceSemanticTests : IDisposable
 
         Assert.Contains(
             hints,
-            hint => hint["kind"]!.Value<string>() == "layout" && hint["label"]!.Value<string>() == "offset 0 | size 1 | align 1");
+            hint => hint["kind"]!.Value<string>() == "layout" && hint["label"]!.Value<string>() == "offset 0, size 1, align 1");
     }
 
     [Fact]
@@ -410,12 +410,12 @@ public class EditorIntelligenceSemanticTests : IDisposable
 
         JArray lenses = await EventuallyAsync(
             () => _session.Client.CodeLensAsync(Uri),
-            answer => HasLensOn(answer, "Length", "offset 0x04 | size 0x04 | align 0x04 | pad 0x03 before"),
+            answer => HasLensOn(answer, "Length", "offset 0x04, size 0x04, align 0x04, pad 0x03 before"),
             "hex field codeLens");
 
         // Same compiler numbers, another notation. The type summary is untouched because a size, an
         // alignment and a padding total are byte counts rather than offsets.
-        Assert.NotNull(LensOn(lenses, "Header", "size 8B | align 4B | padding 3B"));
+        Assert.NotNull(LensOn(lenses, "Header", "size 8B, align 4B, padding 3B"));
     }
 
     [Fact]

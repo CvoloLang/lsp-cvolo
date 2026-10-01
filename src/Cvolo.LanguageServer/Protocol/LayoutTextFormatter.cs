@@ -12,8 +12,14 @@ namespace Cvolo.LanguageServer.Protocol;
 /// </summary>
 internal static class LayoutTextFormatter
 {
-    /// <summary>The separator between the facts of one annotation, matching the compiler's own text.</summary>
-    private const char Separator = '|';
+    /// <summary>
+    /// The separator between the facts of one annotation, matching the compiler's own text.
+    /// <para>
+    /// A comma, never <c>|</c>: an editor joins the several CodeLenses of one line with its own
+    /// <c>|</c>, so a pipe inside a lens title makes one lens read as two and hides where one ends.
+    /// </para>
+    /// </summary>
+    private const char Separator = ',';
 
     /// <summary>
     /// Writes one byte count. Decimal keeps the byte unit, as the compact annotations always have;
@@ -34,14 +40,14 @@ internal static class LayoutTextFormatter
 
     /// <summary>
     /// The field layout facts beside a declaration, where every value is a byte count:
-    /// <c>offset 4B | size 4B | align 4B | pad 3B before</c>.
+    /// <c>offset 4B, size 4B, align 4B, pad 3B before</c>.
     /// </summary>
     public static string FieldLayout(BackendFieldLayoutInfo field, BackendOffsetFormat format) =>
         Facts(field, format, withUnit: true);
 
     /// <summary>
     /// The same facts as an inlay hint, where the values are bare byte counts because the hint already
-    /// sits on a field declaration: <c>offset 4 | size 4 | align 4 | pad 3 before</c>.
+    /// sits on a field declaration: <c>offset 4, size 4, align 4, pad 3 before</c>.
     /// </summary>
     public static string FieldLayoutHint(BackendFieldLayoutInfo field, BackendOffsetFormat format) =>
         Facts(field, format, withUnit: false);
@@ -55,10 +61,10 @@ internal static class LayoutTextFormatter
     {
         var text = string.Create(
             CultureInfo.InvariantCulture,
-            $"offset {Value(field.Offset, format, withUnit)} {Separator} size {Value(field.Size, format, withUnit)} {Separator} align {Value(field.Alignment, format, withUnit)}");
+            $"offset {Value(field.Offset, format, withUnit)}{Separator} size {Value(field.Size, format, withUnit)}{Separator} align {Value(field.Alignment, format, withUnit)}");
 
         return field.PaddingBefore > 0
-            ? string.Create(CultureInfo.InvariantCulture, $"{text} {Separator} pad {Value(field.PaddingBefore, format, withUnit)} before")
+            ? string.Create(CultureInfo.InvariantCulture, $"{text}{Separator} pad {Value(field.PaddingBefore, format, withUnit)} before")
             : text;
     }
 }

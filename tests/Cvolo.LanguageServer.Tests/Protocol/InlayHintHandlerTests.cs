@@ -90,9 +90,9 @@ public class InlayHintHandlerTests : IDisposable
     }
 
     [Theory]
-    [InlineData("decimal", "offset 4 | size 4 | align 4 | pad 3 before")]
-    [InlineData("hex", "offset 0x04 | size 0x04 | align 0x04 | pad 0x03 before")]
-    [InlineData("decimalAndHex", "offset 4 (0x04) | size 4 (0x04) | align 4 (0x04) | pad 3 (0x03) before")]
+    [InlineData("decimal", "offset 4, size 4, align 4, pad 3 before")]
+    [InlineData("hex", "offset 0x04, size 0x04, align 0x04, pad 0x03 before")]
+    [InlineData("decimalAndHex", "offset 4 (0x04), size 4 (0x04), align 4 (0x04), pad 3 (0x03) before")]
     public async Task AFieldLayoutHint_UsesTheSameOffsetNotationAsTheFieldLens(string format, string expected)
     {
         await StartAsync();
@@ -102,7 +102,7 @@ public class InlayHintHandlerTests : IDisposable
             new BackendInlayHint(
                 23,
                 BackendInlayHintKind.Layout,
-                "offset 4 | size 4 | align 4 | pad 3 before",
+                "offset 4, size 4, align 4, pad 3 before",
                 PaddingLeft: true,
                 FieldLayout: new BackendFieldLayoutInfo("Header", "Length", 4, 4, 4, 3)),
         ];
@@ -130,14 +130,14 @@ public class InlayHintHandlerTests : IDisposable
             new BackendInlayHint(
                 4,
                 BackendInlayHintKind.Layout,
-                "offset 0 | size 8 | align 8",
+                "offset 0, size 8, align 8",
                 PaddingLeft: true,
                 FieldLayout: new BackendFieldLayoutInfo("Header", "Kind", 0, 8, 8, 0)),
         ];
 
         JArray? hints = await _session.Client.InlayHintsAsync(Uri, Line(0, 24)).WithTimeout("inlayHint");
 
-        Assert.Equal("offset 0 | size 8 | align 8", Assert.Single(hints!)["label"]!.Value<string>());
+        Assert.Equal("offset 0, size 8, align 8", Assert.Single(hints!)["label"]!.Value<string>());
     }
 
     [Fact]

@@ -299,7 +299,7 @@ public class CodeLensHandlerTests : IDisposable
         new(
             new TextSpan(start, length),
             BackendCodeLensKind.Layout,
-            $"offset {offset}B | size {size}B | align {alignment}B",
+            $"offset {offset}B, size {size}B, align {alignment}B",
             new BackendCodeLensCommand("cvolo.showTypeLayout", [new BackendCodeLensPositionArgument(start)]),
             new BackendFieldLayoutInfo("Header", "Length", offset, size, alignment, paddingBefore));
 
@@ -313,7 +313,7 @@ public class CodeLensHandlerTests : IDisposable
         JArray? lenses = await _session.Client.CodeLensAsync(Uri).WithTimeout("codeLens");
 
         JToken lens = Assert.Single(lenses!);
-        Assert.Equal("offset 4B | size 4B | align 4B | pad 3B before", lens["command"]!["title"]!.Value<string>());
+        Assert.Equal("offset 4B, size 4B, align 4B, pad 3B before", lens["command"]!["title"]!.Value<string>());
 
         // A field is not a type, so the action opens the layout of the type that stores it, at the
         // field's own declaration. The client is handed the position, never a parsed field name.
@@ -333,7 +333,7 @@ public class CodeLensHandlerTests : IDisposable
 
         JArray? lenses = await _session.Client.CodeLensAsync(Uri).WithTimeout("codeLens");
 
-        Assert.Equal("offset 0B | size 8B | align 8B", Assert.Single(lenses!)["command"]!["title"]!.Value<string>());
+        Assert.Equal("offset 0B, size 8B, align 8B", Assert.Single(lenses!)["command"]!["title"]!.Value<string>());
     }
 
     [Fact]
@@ -371,9 +371,9 @@ public class CodeLensHandlerTests : IDisposable
     }
 
     [Theory]
-    [InlineData("decimal", "offset 4B | size 4B | align 4B | pad 3B before")]
-    [InlineData("hex", "offset 0x04 | size 0x04 | align 0x04 | pad 0x03 before")]
-    [InlineData("decimalAndHex", "offset 4B (0x04) | size 4B (0x04) | align 4B (0x04) | pad 3B (0x03) before")]
+    [InlineData("decimal", "offset 4B, size 4B, align 4B, pad 3B before")]
+    [InlineData("hex", "offset 0x04, size 0x04, align 0x04, pad 0x03 before")]
+    [InlineData("decimalAndHex", "offset 4B (0x04), size 4B (0x04), align 4B (0x04), pad 3B (0x03) before")]
     public async Task TheOffsetFormatRewritesTheFieldLensNotationWithoutChangingANumber(string format, string expected)
     {
         await StartAsync();
@@ -403,7 +403,7 @@ public class CodeLensHandlerTests : IDisposable
 
         JArray? lenses = await _session.Client.CodeLensAsync(Uri).WithTimeout("codeLens");
         Assert.Equal(
-            "offset 4B | size 4B | align 4B | pad 3B before",
+            "offset 4B, size 4B, align 4B, pad 3B before",
             Assert.Single(lenses!)["command"]!["title"]!.Value<string>());
     }
 
@@ -414,7 +414,7 @@ public class CodeLensHandlerTests : IDisposable
         await OpenAsync();
         _backend.CannedCodeLenses =
         [
-            new BackendCodeLensInfo(new TextSpan(4, 4), BackendCodeLensKind.Layout, "size 8B | align 4B | padding 3B"),
+            new BackendCodeLensInfo(new TextSpan(4, 4), BackendCodeLensKind.Layout, "size 8B, align 4B, padding 3B"),
         ];
 
         await _session.Client
@@ -426,6 +426,6 @@ public class CodeLensHandlerTests : IDisposable
 
         // Only offsets have a notation. A size, an alignment and a padding total stay decimal byte
         // counts, so the type summary is unchanged by the setting.
-        Assert.Equal("size 8B | align 4B | padding 3B", Assert.Single(lenses!)["command"]!["title"]!.Value<string>());
+        Assert.Equal("size 8B, align 4B, padding 3B", Assert.Single(lenses!)["command"]!["title"]!.Value<string>());
     }
 }
