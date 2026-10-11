@@ -48,6 +48,8 @@ internal sealed class CodeLensHandler(
             return null;
         }
 
+        logger.Warning($"[codeLens] capture uri='{documentUri}', version={context.Document.Version}, textLength={context.Document.Text.Length}.");
+
         BackendCodeLensOptions options = settingsAccessor().CodeLens;
         BackendOffsetFormat offsetFormat = settingsAccessor().Layout.OffsetFormat;
         IReadOnlyList<BackendCodeLensInfo> lenses;
@@ -55,17 +57,26 @@ internal sealed class CodeLensHandler(
         {
             lenses = await Task.Run(() => Store.GetCodeLenses(context, options), cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.Warning($"[codeLens] request cancelled during compute for '{documentUri}', version={context.Document.Version}.");
+            throw;
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.Warning($"[codeLens] backend failure for '{documentUri}': {ex.Message}");
             return null;
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        if (cancellationToken.IsCancellationRequested)
+        {
+            logger.Warning($"[codeLens] request cancelled after compute for '{documentUri}', version={context.Document.Version}; lenses={lenses.Count} computed then dropped.");
+            cancellationToken.ThrowIfCancellationRequested();
+        }
 
         if (!Store.IsCurrent(context))
         {
-            logger.Debug($"[codeLens] discarded stale result for '{documentUri}'.");
+            logger.Warning($"[codeLens] discarded stale result for '{documentUri}', version={context.Document.Version}.");
             return null;
         }
 
@@ -90,6 +101,8 @@ internal sealed class CodeLensHandler(
                 mapped.Add(codeLens);
             }
         }
+
+        logger.Warning($"[codeLens] response uri='{documentUri}', version={context.Document.Version}, lenses={lenses.Count}, mapped={mapped.Count}.");
 
         return [.. mapped];
     }

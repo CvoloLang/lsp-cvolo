@@ -15,6 +15,29 @@ public class DiagnosticSchedulerTests
     private static readonly DocumentUri DocB = DocumentUri.Create(Path.Combine(Path.GetTempPath(), "sched-b.cvl"));
 
     [Fact]
+    public async Task RapidEdits_CoalesceIntoOneDiagnosticAnalysis()
+    {
+        var harness = new Harness();
+        Assert.NotNull(harness.Store.Open(DocA, "cvolo", 1, "initial"));
+        Assert.True(harness.Store.TryGetProject(DocA, out BackendProject? project));
+
+        for (int version = 2; version < 15; version++)
+        {
+            Assert.NotNull(harness.Store.ApplyChanges(DocA, version,
+                [new DocumentChange(null, $"version-{version}")]));
+            harness.Scheduler.Schedule(project);
+        }
+
+        await WaitUntil(() => Volatile.Read(ref harness.Backend.GetDiagnosticsCalls) > 0,
+            "debounced diagnostics");
+        await Task.Delay(400);
+
+        Assert.Equal(1, Volatile.Read(ref harness.Backend.GetDiagnosticsCalls));
+        var last = Assert.Single(harness.Publisher.Publishes);
+        Assert.Equal("version-14", last.Run.DocumentTexts[DocA]);
+    }
+
+    [Fact]
     public async Task StaleGeneration_PublishesNothing_NewerGenerationPublishes()
     {
         var harness = new Harness();

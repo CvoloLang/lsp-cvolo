@@ -69,10 +69,12 @@ internal sealed partial class CvoloLanguageBackend
 
     public IReadOnlyList<BackendCodeLensInfo> GetCodeLenses(BackendSnapshot snapshot, BackendDocumentHandle document, BackendCodeLensOptions? options = null)
     {
-        var backendSnapshot = (ToolingBackendSnapshot)snapshot;
-        var toolingSnapshot = backendSnapshot.Navigation;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         if (FindEditorDocument(snapshot, document) is not { } toolingDocument)
+        {
+            LogTiming("GetCodeLenses", stopwatch, "document-not-in-snapshot, lenses=0", 0);
             return [];
+        }
 
         int textLength = toolingDocument.Text.Length;
 
@@ -129,6 +131,7 @@ internal sealed partial class CvoloLanguageBackend
             mapped.Add(new BackendCodeLensInfo(range, kind.Value, lens.Title, command, fieldLayout));
         }
 
+        LogTiming("GetCodeLenses", stopwatch, $"file='{toolingDocument.FilePath}', rawLenses={lenses.Count}, lenses={mapped.Count}, textLength={textLength}", 0);
         return mapped;
     }
 

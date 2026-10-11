@@ -5,6 +5,7 @@ using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using System.Diagnostics;
 
 namespace Cvolo.LanguageServer.Protocol;
 
@@ -19,6 +20,8 @@ internal sealed class SemanticTokensHandler(
     Func<string[]> tokenTypesAccessor,
     Func<string[]> tokenModifiersAccessor)
 {
+    private const int SemanticTokensMaxInteractiveTextLength = 100_000;
+
     private DocumentStore? _store;
 
     private DocumentStore Store => _store ??= storeAccessor();
@@ -26,6 +29,7 @@ internal sealed class SemanticTokensHandler(
     [JsonRpcMethod(Methods.TextDocumentSemanticTokensFullName, UseSingleObjectParameterDeserialization = true)]
     public async Task<SemanticTokensResponse?> SemanticTokensFull(SemanticTokensParams? parameters, CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } textDocument)
         {
             logger.Debug("[semanticTokens] request without a textDocument; ignored.");
@@ -46,11 +50,23 @@ internal sealed class SemanticTokensHandler(
             logger.Debug($"[semanticTokens] '{documentUri}' is not open; no tokens.");
             return null;
         }
+        LogTiming("capture", stopwatch, documentUri);
 
-        BackendSemanticTokenResult result;
+        if (context.Document.Text.Length > SemanticTokensMaxInteractiveTextLength)
+        {
+            logger.Warning($"[perf] semanticTokens skipped for large document: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={SemanticTokensMaxInteractiveTextLength}");
+            return new SemanticTokensResponse([]);
+        }
+
+        BackendSemanticTokenResult? result;
         try
         {
-            result = await Task.Run(() => Store.GetSemanticTokens(context), cancellationToken).ConfigureAwait(false);
+            result = await Store.RunInteractiveQueryAsync(
+                context,
+                "semanticTokens",
+                () => Store.GetSemanticTokens(context),
+                cancellationToken).ConfigureAwait(false);
+            LogTiming("backend", stopwatch, documentUri);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -60,7 +76,14 @@ internal sealed class SemanticTokensHandler(
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        if (result is null)
+        {
+            logger.Debug($"[semanticTokens] skipped stale request for '{documentUri}'.");
+            return null;
+        }
+
         int[]? data = Encode(result, context.Document.Text, tokenTypesAccessor(), tokenModifiersAccessor());
+        LogTiming("encode", stopwatch, documentUri);
         if (data is null)
         {
             return null;
@@ -77,7 +100,47 @@ internal sealed class SemanticTokensHandler(
         }
 
         logger.Info($"[semanticTokens] {documentUri}: {data.Length / 5} token(s).");
+        LogTiming("total", stopwatch, documentUri);
+        LogTokenBreakdown(documentUri, context.Document.Version, result);
         return new SemanticTokensResponse(data);
+    }
+
+    private readonly Dictionary<DocumentUri, DocumentVersion> _lastTokenBreakdownVersion = new();
+
+    /// <summary>
+    /// Emits one warning per document version summarizing which semantic token kinds the
+    /// compiler produced, so a missing colour can be traced to the emitted kinds rather than
+    /// guessed at. The version gate keeps it to a single line per edit, not per request.
+    /// </summary>
+    private void LogTokenBreakdown(DocumentUri uri, DocumentVersion version, BackendSemanticTokenResult result)
+    {
+        lock (_lastTokenBreakdownVersion)
+        {
+            if (_lastTokenBreakdownVersion.TryGetValue(uri, out var last) && last == version)
+            {
+                return;
+            }
+
+            _lastTokenBreakdownVersion[uri] = version;
+        }
+
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (BackendSemanticToken token in result.Tokens)
+        {
+            var name = Fallbacks(token.Kind) is [var first, ..] ? first : token.Kind.ToString();
+            counts[name] = counts.TryGetValue(name, out var existing) ? existing + 1 : 1;
+        }
+
+        var summary = string.Join(", ", counts.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}={pair.Value}"));
+        logger.Warning($"[perf] semantic tokens breakdown: uri='{uri}', version={version}, total={result.Tokens.Count} [{summary}]");
+    }
+
+    private void LogTiming(string phase, Stopwatch stopwatch, DocumentUri uri, int thresholdMs = 50)
+    {
+        if (stopwatch.ElapsedMilliseconds >= thresholdMs)
+            logger.Warning($"[perf] semanticTokens {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
+        else
+            logger.Debug($"[perf] semanticTokens {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
     }
 
     private int[]? Encode(BackendSemanticTokenResult result, string text, string[] tokenTypes, string[] tokenModifiers)

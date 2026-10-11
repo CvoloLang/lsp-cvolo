@@ -10,10 +10,9 @@ using Xunit;
 namespace Cvolo.LanguageServer.Tests.Backend;
 
 /// <summary>
-/// Item 7: diagnostics describe the current text, while definition, references, CodeLens and the
-/// outline are answered from the last snapshot that parsed. A keystroke that leaves the document
-/// unparseable must therefore change the diagnostics without making navigation disappear,
-/// duplicate, jump or fail.
+/// Snapshot advancement keeps diagnostics and editor-intelligence queries tied to the same current
+/// text. Transient syntax errors must still be surfaced as diagnostics without crashing semantic
+/// queries that can answer from the captured snapshot.
 /// </summary>
 public class CvoloSnapshotStabilityTests : IDisposable
 {
@@ -150,25 +149,25 @@ public class CvoloSnapshotStabilityTests : IDisposable
         var repaired = (ToolingBackendSnapshot)_backend.UpdateDocument(project, handle, Valid + "\n");
 
         Assert.Empty(DiagnosticsFor(_backend, repaired, handle));
-        Assert.Same(repaired.Snapshot, repaired.Navigation);
         Assert.True(repaired.Generation > broken.Generation);
     }
 
     [Fact]
-    public void RetainedNavigationStateIsDiscardedAfterSustainedIncoherence()
+    public void SustainedIncoherenceKeepsAdvancingTheCurrentSnapshot()
     {
         var project = _backend.OpenProject(MainUri)!;
         var handle = _backend.Resolve(project, MainUri);
 
         _backend.UpdateDocument(project, handle, Valid);
         ToolingBackendSnapshot? snapshot = (ToolingBackendSnapshot)_backend.UpdateDocument(project, handle, WithTransientBreak(Valid));
-        for (int i = 0; i < CvoloProjectSession.MaxRetainedNavigationAdvances; i++)
+        long firstBrokenGeneration = snapshot.Generation;
+        for (int i = 0; i < 4; i++)
         {
             snapshot = (ToolingBackendSnapshot)_backend.UpdateDocument(project, handle, WithTransientBreak(Valid) + "\n// " + new string('x', i));
         }
 
-        // Stale navigation state must not outlive the edit that produced it.
         Assert.NotNull(snapshot);
-        Assert.Same(snapshot.Snapshot, snapshot.Navigation);
+        Assert.True(snapshot.Generation > firstBrokenGeneration);
+        Assert.Contains(DiagnosticsFor(_backend, snapshot, handle), d => ParserSyntaxDiagnostic.IsSyntaxError(d.Code));
     }
 }

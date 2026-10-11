@@ -5,6 +5,7 @@ using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using System.Diagnostics;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
 
 namespace Cvolo.LanguageServer.Protocol;
@@ -27,6 +28,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
     [JsonRpcMethod(Methods.TextDocumentHoverName, UseSingleObjectParameterDeserialization = true)]
     public async Task<Hover?> Hover(TextDocumentPositionParams? parameters, CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } textDocument)
         {
             logger.Debug("[hover] request without a textDocument; ignored.");
@@ -49,6 +51,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
             logger.Debug($"[hover] '{documentUri}' is not open; no hover.");
             return null;
         }
+        LogTiming("capture", stopwatch, documentUri);
 
         var index = new LineIndex(context.Document.Text);
         if (!index.TryGetOffset(new TextPosition(position.Line, position.Character), out int offset))
@@ -62,7 +65,12 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
         BackendSymbolInfo? symbol;
         try
         {
-            symbol = await Task.Run(() => Store.GetSymbolAtPosition(context, offset), cancellationToken).ConfigureAwait(false);
+            symbol = await Store.RunInteractiveQueryAsync(
+                context,
+                "hover",
+                () => Store.GetSymbolAtPosition(context, offset),
+                cancellationToken).ConfigureAwait(false);
+            LogTiming("backend", stopwatch, documentUri);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -78,7 +86,17 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
             return null;
         }
 
-        return symbol is null ? null : Map(symbol, index, context.Document.Text.Length);
+        Hover? hover = symbol is null ? null : Map(symbol, index, context.Document.Text.Length);
+        LogTiming("total", stopwatch, documentUri);
+        return hover;
+    }
+
+    private void LogTiming(string phase, Stopwatch stopwatch, DocumentUri uri, int thresholdMs = 50)
+    {
+        if (stopwatch.ElapsedMilliseconds >= thresholdMs)
+            logger.Warning($"[perf] hover {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
+        else
+            logger.Debug($"[perf] hover {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
     }
 
     private Hover? Map(BackendSymbolInfo symbol, LineIndex index, int textLength)

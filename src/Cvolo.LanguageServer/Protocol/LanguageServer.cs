@@ -96,11 +96,21 @@ internal sealed class LanguageServer(
     internal DocumentStore Store => GetOrCreate(ref _store, CreateStore);
 
     /// <summary>
-    /// Text document synchronization (didOpen/didChange/didClose) handler.
+    /// Text document synchronization (didOpen/didChange/didClose) handler. A project change is
+    /// broadcast to every client-refreshable surface so editor state stays live while typing:
+    /// semantic tokens and (when the client can receive them) code lenses and inlay hints.
     /// </summary>
     internal TextDocumentSyncHandler Sync => GetOrCreate(
         ref _sync,
-        () => new TextDocumentSyncHandler(logger, _diagnostics, () => Store, () => Refresh.RequestRefresh()));
+        () => new TextDocumentSyncHandler(
+            logger,
+            _diagnostics,
+            () => Store,
+            () =>
+            {
+                Refresh.RequestRefresh();
+                EditorIntelligenceRefresh.RequestRefresh();
+            }));
 
     /// <summary>
     /// Session-scoped, bounded store of completion-resolve entries guarding opaque data tokens.
@@ -285,7 +295,8 @@ internal sealed class LanguageServer(
 
         _state.MarkInitializeReceived(initializeParams);
         logger.Info($"Semantic tokens: enabled={_state.SemanticTokensEnabled}, refresh={_state.RefreshSupported}, tokenTypes={_state.SemanticTokenTypes.Length}, tokenModifiers={_state.SemanticTokenModifiers.Length}.");
-        logger.Info($"Editor intelligence: codeLensRefresh={_state.CodeLensRefreshSupported}, inlayHintRefresh={_state.InlayHintRefreshSupported}.");
+        logger.Warning($"[perf] semantic tokens legend: types=[{string.Join(",", _state.SemanticTokenTypes)}], modifiers=[{string.Join(",", _state.SemanticTokenModifiers)}].");
+        logger.Warning($"[perf] editor intelligence: codeLensRefresh={_state.CodeLensRefreshSupported}, inlayHintRefresh={_state.InlayHintRefreshSupported}.");
         _diagnostics.SetRelatedInformationSupported(
             initializeParams.Capabilities?.TextDocument?.PublishDiagnostics?.RelatedInformation == true);
         logger.Info("Client initialized.");

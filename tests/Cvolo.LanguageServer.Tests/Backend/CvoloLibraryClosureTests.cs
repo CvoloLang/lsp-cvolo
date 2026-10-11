@@ -31,6 +31,33 @@ public class CvoloLibraryClosureTests : IDisposable
         document.FilePath.EndsWith(Path.Combine("System", "Console.cvl"), StringComparison.OrdinalIgnoreCase);
 
     [Fact]
+    public void BodyOnlyEdit_DoesNotRediscoverProject()
+    {
+        var project = (CvoloProjectSession)_backend.OpenProject(MainUri)!;
+        var handle = _backend.Resolve(project, MainUri);
+        CvoloProject original = project.Project;
+
+        var first = (ToolingBackendSnapshot)_backend.UpdateDocument(project, handle, "int Main() { return 1; }\n");
+        var second = (ToolingBackendSnapshot)_backend.UpdateDocument(project, handle, "int Main() { return 2; }\n");
+
+        Assert.Same(original, project.Project);
+        Assert.True(second.Generation > first.Generation);
+    }
+
+    [Fact]
+    public void UsingFollowedByBodyEdit_DoesNotRediscoverProject()
+    {
+        var project = (CvoloProjectSession)_backend.OpenProject(MainUri)!;
+        var handle = _backend.Resolve(project, MainUri);
+        _backend.UpdateDocument(project, handle, "using System;\nint Main() { return 0; }\n");
+        CvoloProject original = project.Project;
+
+        _backend.UpdateDocument(project, handle, "using System;\nint Main() { return 1; }\n");
+
+        Assert.Same(original, project.Project);
+    }
+
+    [Fact]
     public void DidChangeAddingUsing_AdvancesClosureWithoutRestart()
     {
         var project = _backend.OpenProject(MainUri)!;

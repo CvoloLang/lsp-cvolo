@@ -5,6 +5,7 @@ using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Core.Editing;
 using Cvolo.LanguageServer.Core.Logging;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace Cvolo.LanguageServer.Core;
 
@@ -20,11 +21,20 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     private readonly ICoreLogger _logger = logger ?? new NullCoreLogger();
     private readonly ConcurrentDictionary<DocumentUri, DocumentEntry> _documents = new();
     private readonly ConcurrentDictionary<DocumentUri, object> _gates = new();
+    private readonly SemaphoreSlim _interactiveQueryGate = new(1, 1);
 
     // Serializes document/project advancement against diagnostic publication so
     // that a result can only be committed while all freshness conditions still
     // hold atomically (see TryCommitDiagnostics).
     private readonly Lock _publicationGate = new();
+
+    private void LogTiming(string operation, Stopwatch stopwatch, string detail, int thresholdMs = 50)
+    {
+        if (stopwatch.ElapsedMilliseconds >= thresholdMs)
+            _logger.Write(CoreLogLevel.Warning, $"[perf] {operation} took {stopwatch.ElapsedMilliseconds} ms: {detail}");
+        else
+            _logger.Write(CoreLogLevel.Debug, $"[perf] {operation} took {stopwatch.ElapsedMilliseconds} ms: {detail}");
+    }
 
     public ICollection<DocumentUri> OpenUris => _documents.Keys;
 
@@ -35,6 +45,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public DocumentState? Open(DocumentUri uri, string languageId, int version, string? text)
     {
+        var stopwatch = Stopwatch.StartNew();
         var gate = _gates.GetOrAdd(uri, static _ => new object());
         lock (_publicationGate)
             lock (gate)
@@ -70,6 +81,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                     snapshot);
                 _documents[uri] = new DocumentEntry(state, project, handle);
                 _logger.Write(CoreLogLevel.Info, $"Opened '{uri}' v{version} ({languageId}).");
+                LogTiming("DocumentStore.Open", stopwatch, $"uri='{uri}', version={version}, textLength={effectiveText.Length}", 100);
                 return state;
             }
     }
@@ -82,6 +94,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public DocumentState? ApplyChanges(DocumentUri uri, int version, IReadOnlyList<DocumentChange> changes)
     {
+        var stopwatch = Stopwatch.StartNew();
         var gate = _gates.GetOrAdd(uri, static _ => new object());
         lock (_publicationGate)
             lock (gate)
@@ -114,6 +127,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                 };
                 _documents[uri] = current with { State = next };
                 _logger.Write(CoreLogLevel.Debug, $"Changed '{uri}' v{version}: {changes.Count} change(s).");
+                LogTiming("DocumentStore.ApplyChanges", stopwatch, $"uri='{uri}', version={version}, changes={changes.Count}, textLength={newText.Length}", 50);
                 return next;
             }
     }
@@ -126,6 +140,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public BackendProject? Close(DocumentUri uri)
     {
+        var stopwatch = Stopwatch.StartNew();
         var gate = _gates.GetOrAdd(uri, static _ => new object());
         lock (_publicationGate)
             lock (gate)
@@ -146,6 +161,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                 }
 
                 _logger.Write(CoreLogLevel.Info, $"Closed '{uri}'.");
+                LogTiming("DocumentStore.Close", stopwatch, $"uri='{uri}'", 100);
                 return current.Project;
             }
     }
@@ -170,12 +186,15 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public bool TryCapture(DocumentUri uri, out SemanticRequestContext context)
     {
+        var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
             if (_documents.TryGetValue(uri, out DocumentEntry? current))
             {
                 DocumentState state = current.State;
-                BackendSnapshot currentProjectSnapshot = CaptureSynchronizedSnapshot(current.Project);
+                // Interactive requests must not scan every closed source file under the publication gate.
+                // Closed-file synchronization still runs for diagnostic and semantic-edit captures.
+                BackendSnapshot currentProjectSnapshot = backend.CaptureCurrentSnapshot(current.Project);
                 context = new SemanticRequestContext(
                     state.Uri,
                     state.SessionId,
@@ -183,6 +202,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                     state,
                     current.Project,
                     currentProjectSnapshot);
+                LogTiming("DocumentStore.TryCapture", stopwatch, $"uri='{uri}', version={state.Version}, textLength={state.Text.Length}", 50);
                 return true;
             }
 
@@ -197,6 +217,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public bool TryCaptureSemanticEdit(DocumentUri uri, out SemanticEditRequestContext context)
     {
+        var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
             if (!_documents.TryGetValue(uri, out DocumentEntry? current))
@@ -230,17 +251,21 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
             }
 
             context = new SemanticEditRequestContext(semantic, open);
+            LogTiming("DocumentStore.TryCaptureSemanticEdit", stopwatch, $"uri='{uri}', version={state.Version}, openDocuments={open.Count}", 100);
             return true;
         }
     }
 
     private BackendSnapshot CaptureSynchronizedSnapshot(BackendProject project)
     {
+        var stopwatch = Stopwatch.StartNew();
         var openHandles = _documents.Values
             .Where(entry => ReferenceEquals(entry.Project, project))
             .Select(entry => entry.Handle)
             .ToArray();
-        return backend.SynchronizeClosedDocuments(project, openHandles);
+        BackendSnapshot snapshot = backend.SynchronizeClosedDocuments(project, openHandles);
+        LogTiming("DocumentStore.CaptureSynchronizedSnapshot", stopwatch, $"openHandles={openHandles.Length}", 100);
+        return snapshot;
     }
 
     /// <summary>Returns the backend project hosting an open document.</summary>
@@ -263,6 +288,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public bool TryCaptureDiagnosticRun(BackendProject project, out DiagnosticRunContext context)
     {
+        var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
             BackendSnapshot snapshot = CaptureSynchronizedSnapshot(project);
@@ -279,6 +305,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
             }
 
             context = new DiagnosticRunContext(project, snapshot, targets);
+            LogTiming("DocumentStore.TryCaptureDiagnosticRun", stopwatch, $"targets={targets.Count}", 100);
             return targets.Count > 0;
         }
     }
@@ -329,6 +356,36 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     }
 
     /// <summary>
+    /// Runs one expensive interactive compiler query at a time and drops stale requests before they
+    /// enter tooling. VS Code can issue completion, hover and semantic-token requests concurrently;
+    /// letting every stale request compute makes typing latency much worse than one slow query.
+    /// </summary>
+    public async Task<T?> RunInteractiveQueryAsync<T>(SemanticRequestContext context, string operation, Func<T> query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var stopwatch = Stopwatch.StartNew();
+        await _interactiveQueryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            LogTiming("DocumentStore.InteractiveQuery(wait)", stopwatch, $"operation={operation}, uri='{context.Uri}', version={context.Version}", 50);
+            if (!IsCurrent(context))
+            {
+                _logger.Write(CoreLogLevel.Debug, $"[perf] skipped stale {operation} before backend query: uri='{context.Uri}', version={context.Version}");
+                return default;
+            }
+
+            stopwatch.Restart();
+            T result = await Task.Run(query, cancellationToken).ConfigureAwait(false);
+            LogTiming("DocumentStore.InteractiveQuery(run)", stopwatch, $"operation={operation}, uri='{context.Uri}', version={context.Version}", 50);
+            return result;
+        }
+        finally
+        {
+            _interactiveQueryGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Atomically commits a captured diagnostic run. Under the store's
     /// publication gate the captured project snapshot is re-validated as current
     /// and the targets are filtered to those still fresh (same URI, session,
@@ -341,6 +398,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     public bool TryCommitDiagnostics(DiagnosticRunContext context, Action<IReadOnlyList<DiagnosticPublishTarget>> commit)
     {
         ArgumentNullException.ThrowIfNull(commit);
+        var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
             if (!backend.IsCurrentSnapshot(context.Project, context.CurrentProjectSnapshot))
@@ -358,6 +416,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
             }
 
             commit(eligible);
+            LogTiming("DocumentStore.TryCommitDiagnostics", stopwatch, $"targets={context.Targets.Count}, eligible={eligible.Count}", 50);
             return true;
         }
     }
@@ -378,7 +437,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public BackendCompletionResult GetCompletions(SemanticRequestContext context, int position)
     {
-        return backend.GetCompletions(context.Document.BackendSnapshot, context.Document.BackendDocument, position);
+        return backend.GetCompletions(context.CurrentProjectSnapshot, context.Document.BackendDocument, position);
     }
 
     /// <summary>Returns signature help from the coherent project snapshot captured for the request.</summary>

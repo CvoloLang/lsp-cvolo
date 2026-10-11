@@ -4,47 +4,50 @@ using StreamJsonRpc;
 namespace Cvolo.LanguageServer.Protocol;
 
 /// <summary>
-/// Coalescing coordinator for the server-to-client <c>workspace/semanticTokens/refresh</c> request
-/// (§23). At most one request is in flight and one follow-up is pending; refresh is only sent when
-/// semantic tokens are enabled and the client supports refresh, and no new work starts after
-/// shutdown.
+/// Coalesces global semantic-token refresh notifications. Edits to an open file
+/// naturally invalidate that file in VS Code, but other open files can also be
+/// affected by a project change. A short quiet period prevents refresh storms.
 /// </summary>
 internal sealed class SemanticTokensRefreshCoordinator(Func<bool> enabled, ILspLogger logger)
 {
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private static readonly TimeSpan EditQuietPeriod = TimeSpan.FromMilliseconds(350);
     private readonly object _stateLock = new();
     private JsonRpc? _rpc;
     private bool _pending;
+    private bool _running;
     private bool _stopped;
+    private long _revision;
 
-    public void Attach(JsonRpc rpc) => _rpc = rpc;
+    public void Attach(JsonRpc rpc)
+    {
+        lock (_stateLock)
+            _rpc = rpc;
+    }
 
-    /// <summary>Stops starting or following up refresh work (shutdown/disposal).</summary>
     public void Stop()
     {
         lock (_stateLock)
         {
             _stopped = true;
             _pending = false;
+            _revision++;
         }
     }
 
-    /// <summary>
-    /// Requests a refresh after a project semantic change. Coalesces concurrent requests; dispatch
-    /// is asynchronous so document synchronization is never blocked on the client.
-    /// </summary>
     public void RequestRefresh()
     {
         if (!enabled())
             return;
-
         lock (_stateLock)
         {
-            if (_stopped || _pending)
+            if (_stopped)
                 return;
+            _revision++;
             _pending = true;
+            if (_running)
+                return;
+            _running = true;
         }
-
         _ = Task.Run(DrainAsync);
     }
 
@@ -52,48 +55,56 @@ internal sealed class SemanticTokensRefreshCoordinator(Func<bool> enabled, ILspL
     {
         try
         {
-            await _gate.WaitAsync().ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
-
-        try
-        {
             while (true)
             {
+                long revision;
                 lock (_stateLock)
                 {
-                    if (!_pending || _stopped)
-                    {
-                        _pending = false;
+                    if (_stopped || !_pending)
                         return;
-                    }
-
                     _pending = false;
+                    revision = _revision;
                 }
 
-                JsonRpc? rpc = _rpc;
+                await Task.Delay(EditQuietPeriod).ConfigureAwait(false);
+                JsonRpc? rpc;
+                lock (_stateLock)
+                {
+                    if (_stopped)
+                        return;
+                    if (revision != _revision)
+                        continue;
+                    rpc = _rpc;
+                }
                 if (rpc is null)
                     return;
-
                 try
                 {
-                    await rpc.InvokeWithParameterObjectAsync<object?>("workspace/semanticTokens/refresh", null).ConfigureAwait(false);
+                    await rpc.InvokeWithParameterObjectAsync<object?>(
+                        "workspace/semanticTokens/refresh", null).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     logger.Warning($"semantic token refresh failed: {ex.Message}");
                 }
-
-                if (_stopped)
-                    return;
             }
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"semantic token refresh worker failed: {ex.Message}");
         }
         finally
         {
-            _gate.Release();
+            bool restart;
+            lock (_stateLock)
+            {
+                _running = false;
+                restart = _pending && !_stopped;
+                if (restart)
+                    _running = true;
+            }
+            if (restart)
+                _ = Task.Run(DrainAsync);
         }
     }
 }

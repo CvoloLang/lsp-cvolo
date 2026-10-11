@@ -11,11 +11,13 @@ namespace Cvolo.LanguageServer.Protocol;
 /// </summary>
 internal sealed class ClientRefreshRequest(string method, Func<bool> supported, ILspLogger logger)
 {
+    private static readonly TimeSpan EditQuietPeriod = TimeSpan.FromMilliseconds(350);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _stateLock = new();
     private JsonRpc? _rpc;
     private bool _pending;
     private bool _stopped;
+    private long _revision;
 
     /// <summary>Attaches the transport the request is sent over.</summary>
     public void Attach(JsonRpc rpc) => _rpc = rpc;
@@ -43,11 +45,12 @@ internal sealed class ClientRefreshRequest(string method, Func<bool> supported, 
 
         lock (_stateLock)
         {
-            if (_stopped || _pending)
+            if (_stopped)
             {
                 return;
             }
 
+            _revision++;
             _pending = true;
         }
 
@@ -69,6 +72,7 @@ internal sealed class ClientRefreshRequest(string method, Func<bool> supported, 
         {
             while (true)
             {
+                long revision;
                 lock (_stateLock)
                 {
                     if (!_pending || _stopped)
@@ -78,6 +82,24 @@ internal sealed class ClientRefreshRequest(string method, Func<bool> supported, 
                     }
 
                     _pending = false;
+                    revision = _revision;
+                }
+
+                // Edits invalidate lenses and hints continuously; only dispatch once the edit
+                // stream has been quiet so a pause never observes a stale request storm (§59, §60).
+                await Task.Delay(EditQuietPeriod).ConfigureAwait(false);
+
+                lock (_stateLock)
+                {
+                    if (_stopped)
+                    {
+                        return;
+                    }
+
+                    if (revision != _revision)
+                    {
+                        continue; // a newer request arrived while quieting; drain that instead
+                    }
                 }
 
                 JsonRpc? rpc = _rpc;

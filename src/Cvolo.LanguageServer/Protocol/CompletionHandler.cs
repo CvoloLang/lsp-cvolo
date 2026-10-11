@@ -5,6 +5,7 @@ using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using System.Diagnostics;
 using System.Text;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
 
@@ -27,6 +28,9 @@ internal sealed class CompletionHandler(
     Func<bool> documentationMarkdown,
     Func<CompletionResolveStore> resolveStoreAccessor)
 {
+    private const int CompletionQuietPeriodMs = 120;
+    private const int CompletionMaxAutomaticTextLength = 100_000;
+
     private DocumentStore? _store;
     private CompletionResolveStore? _resolveStore;
 
@@ -39,6 +43,7 @@ internal sealed class CompletionHandler(
     [JsonRpcMethod(Methods.TextDocumentCompletionName, UseSingleObjectParameterDeserialization = true)]
     public async Task<CompletionList?> Completion(CompletionParams? parameters, CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } textDocument)
         {
             logger.Debug("[completion] request without a textDocument; ignored.");
@@ -69,6 +74,13 @@ internal sealed class CompletionHandler(
         }
 
         logger.Debug($"[completion] captured session={context.SessionId} version={context.Version}");
+        LogTiming("capture", stopwatch, documentUri);
+
+        if (context.Document.Text.Length > CompletionMaxAutomaticTextLength && !IsExplicitInvocation(parameters))
+        {
+            logger.Warning($"[perf] completion skipped for large document auto-trigger: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={CompletionMaxAutomaticTextLength}, triggerKind={parameters.Context?.TriggerKind}");
+            return EmptyCompletionList();
+        }
 
         // The request position is mapped against the exact captured text so the
         // replacement span is always valid over the text the offset refers to.
@@ -81,12 +93,24 @@ internal sealed class CompletionHandler(
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        BackendCompletionResult result;
+        await Task.Delay(CompletionQuietPeriodMs, cancellationToken).ConfigureAwait(false);
+        if (!Store.IsCurrent(context))
+        {
+            logger.Debug($"[completion] skipped stale request after quiet period for '{documentUri}'.");
+            return null;
+        }
+
+        BackendCompletionResult? result;
         try
         {
             // Run the (synchronous) semantic query off the JSON-RPC receive loop so
             // a slow query cannot stall other requests or cancellation (§19, §22).
-            result = await Task.Run(() => Store.GetCompletions(context, offset), cancellationToken).ConfigureAwait(false);
+            result = await Store.RunInteractiveQueryAsync(
+                context,
+                "completion",
+                () => Store.GetCompletions(context, offset),
+                cancellationToken).ConfigureAwait(false);
+            LogTiming("backend", stopwatch, documentUri);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -95,6 +119,12 @@ internal sealed class CompletionHandler(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (result is null)
+        {
+            logger.Debug($"[completion] skipped stale request for '{documentUri}'.");
+            return null;
+        }
 
         if (!Store.IsCurrent(context))
         {
@@ -118,8 +148,28 @@ internal sealed class CompletionHandler(
                 mapped.List.Items[stagedItem.ItemIndex].Data = stagedItem.Token;
         }
 
+        LogTiming("total", stopwatch, documentUri);
         return mapped.List;
     }
+
+    private void LogTiming(string phase, Stopwatch stopwatch, DocumentUri uri, int thresholdMs = 50)
+    {
+        if (stopwatch.ElapsedMilliseconds >= thresholdMs)
+            logger.Warning($"[perf] completion {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
+        else
+            logger.Debug($"[perf] completion {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
+    }
+
+    private static bool IsExplicitInvocation(CompletionParams parameters)
+    {
+        return parameters.Context?.TriggerKind is CompletionTriggerKind.Invoked;
+    }
+
+    private static CompletionList EmptyCompletionList() => new()
+    {
+        IsIncomplete = false,
+        Items = [],
+    };
 
     [JsonRpcMethod("completionItem/resolve", UseSingleObjectParameterDeserialization = true)]
     public async Task<CompletionItem?> Resolve(CompletionItem? item, CancellationToken cancellationToken)

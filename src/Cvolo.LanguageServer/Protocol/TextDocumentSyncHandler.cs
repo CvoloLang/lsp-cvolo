@@ -5,6 +5,7 @@ using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using System.Diagnostics;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
 
 namespace Cvolo.LanguageServer.Protocol;
@@ -63,6 +64,7 @@ internal sealed class TextDocumentSyncHandler(
     [JsonRpcMethod(Methods.TextDocumentDidOpenName, UseSingleObjectParameterDeserialization = true)]
     public void DidOpen(DidOpenTextDocumentParams? parameters)
     {
+        var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } item)
         {
             logger.Warning("didOpen without a textDocument; ignored.");
@@ -91,6 +93,7 @@ internal sealed class TextDocumentSyncHandler(
             logger.Warning($"[diag] didOpen for '{documentUri}' was rejected; diagnostics not scheduled.");
             return;
         }
+        LogTiming("didOpen/store", stopwatch, documentUri, 100);
 
         if (!Store.TryGetProject(documentUri, out BackendProject? project))
         {
@@ -101,11 +104,13 @@ internal sealed class TextDocumentSyncHandler(
         logger.Info($"[diag] didOpen '{documentUri}' v{item.Version}; scheduling diagnostics.");
         Scheduler.Schedule(project);
         onProjectChanged?.Invoke();
+        LogTiming("didOpen/total", stopwatch, documentUri, 100);
     }
 
     [JsonRpcMethod(Methods.TextDocumentDidChangeName, UseSingleObjectParameterDeserialization = true)]
     public void DidChange(DidChangeTextDocumentParams? parameters)
     {
+        var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } textDocument || parameters.ContentChanges is null)
         {
             logger.Warning("didChange without a textDocument or contentChanges; ignored.");
@@ -135,6 +140,7 @@ internal sealed class TextDocumentSyncHandler(
             logger.Debug($"[diag] didChange for '{documentUri}' v{textDocument.Version} was not applied; diagnostics not scheduled.");
             return;
         }
+        LogTiming("didChange/store", stopwatch, documentUri);
 
         if (!Store.TryGetProject(documentUri, out BackendProject? project))
         {
@@ -145,11 +151,13 @@ internal sealed class TextDocumentSyncHandler(
         logger.Info($"[diag] didChange '{documentUri}' v{textDocument.Version}; scheduling diagnostics.");
         Scheduler.Schedule(project);
         onProjectChanged?.Invoke();
+        LogTiming("didChange/total", stopwatch, documentUri);
     }
 
     [JsonRpcMethod(Methods.TextDocumentDidCloseName, UseSingleObjectParameterDeserialization = true)]
     public void DidClose(DidCloseTextDocumentParams? parameters)
     {
+        var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } textDocument)
         {
             logger.Warning("didClose without a textDocument; ignored.");
@@ -173,6 +181,7 @@ internal sealed class TextDocumentSyncHandler(
             logger.Debug($"[diag] didClose for '{documentUri}' ignored; document was not open.");
             return;
         }
+        LogTiming("didClose/store", stopwatch, documentUri, 100);
 
         logger.Info($"[diag] didClose '{documentUri}'; cleared published diagnostics.");
         Publisher.PublishEmpty(documentUri);
@@ -186,6 +195,15 @@ internal sealed class TextDocumentSyncHandler(
         }
 
         onProjectChanged?.Invoke();
+        LogTiming("didClose/total", stopwatch, documentUri, 100);
+    }
+
+    private void LogTiming(string phase, Stopwatch stopwatch, DocumentUri uri, int thresholdMs = 50)
+    {
+        if (stopwatch.ElapsedMilliseconds >= thresholdMs)
+            logger.Warning($"[perf] sync {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
+        else
+            logger.Debug($"[perf] sync {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
     }
 
     public void Dispose()
