@@ -99,48 +99,75 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     {
         var stopwatch = Stopwatch.StartNew();
         var gate = _gates.GetOrAdd(uri, static _ => new object());
-        try
+        lock (gate)
         {
+            // Short input transaction: validate the payload against the current
+            // revision and record the base revision. The publication lock is held
+            // only long enough to read the authoritative state, never across any
+            // tooling, filesystem or package work (INC "Incremental Semantic
+            // Snapshots", S1: no Tooling call or I/O inside a publication gate).
+            DocumentState currentState;
+            BackendProject project;
+            BackendDocumentHandle handle;
             lock (_publicationGate)
-                lock (gate)
+            {
+                if (!_documents.TryGetValue(uri, out DocumentEntry? current))
                 {
-                    if (!_documents.TryGetValue(uri, out DocumentEntry? current))
-                    {
-                        _logger.Write(CoreLogLevel.Warning, $"didChange for unopened document '{uri}' ignored.");
-                        return null;
-                    }
-
-                    DocumentState currentState = current.State;
-                    if (version <= currentState.Version.Value)
-                    {
-                        _logger.Write(CoreLogLevel.Warning, $"Stale didChange v{version} for '{uri}' (current v{currentState.Version.Value}) ignored.");
-                        return null;
-                    }
-
-                    if (!IncrementalTextEditor.TryApplyChanges(currentState.Text, changes, out string newText))
-                    {
-                        _logger.Write(CoreLogLevel.Warning, $"Invalid range in didChange v{version} for '{uri}'; nothing applied.");
-                        return null;
-                    }
-
-                    BackendSnapshot snapshot = backend.UpdateDocument(current.Project, current.Handle, newText);
-                    DocumentState next = currentState with
-                    {
-                        Version = new DocumentVersion(version),
-                        Text = newText,
-                        BackendSnapshot = snapshot,
-                    };
-                    _documents[uri] = current with { State = next };
-                    _logger.Write(CoreLogLevel.Debug, $"Changed '{uri}' v{version}: {changes.Count} change(s).");
-                    LogTiming("DocumentStore.ApplyChanges", stopwatch, $"uri='{uri}', version={version}, changes={changes.Count}, textLength={newText.Length}", 50);
-                    _metrics?.RecordDidChange();
-                    _metrics?.RecordSnapshotAdvance();
-                    return next;
+                    _logger.Write(CoreLogLevel.Warning, $"didChange for unopened document '{uri}' ignored.");
+                    return null;
                 }
-        }
-        finally
-        {
-            _metrics?.RecordPublicationGateHold(stopwatch.ElapsedTicks);
+
+                currentState = current.State;
+                if (version <= currentState.Version.Value)
+                {
+                    _logger.Write(CoreLogLevel.Warning, $"Stale didChange v{version} for '{uri}' (current v{currentState.Version.Value}) ignored.");
+                    return null;
+                }
+
+                project = current.Project;
+                handle = current.Handle;
+                _metrics?.RecordPublicationGateHold(stopwatch.ElapsedTicks);
+            }
+
+            if (!IncrementalTextEditor.TryApplyChanges(currentState.Text, changes, out string newText))
+            {
+                _logger.Write(CoreLogLevel.Warning, $"Invalid range in didChange v{version} for '{uri}'; nothing applied.");
+                return null;
+            }
+
+            // The backend advance (WithDocument / dependency closure discovery) runs
+            // outside the publication lock so it can never stall input publication,
+            // diagnostic commits or other documents.
+            BackendSnapshot snapshot = backend.UpdateDocument(project, handle, newText);
+
+            // Publish text, version and snapshot together in a second short
+            // transaction. If the revision moved (for example a concurrent
+            // baseline sync for the same document), the advance is abandoned
+            // rather than published over newer state.
+            var publishWatch = Stopwatch.StartNew();
+            lock (_publicationGate)
+            {
+                if (!_documents.TryGetValue(uri, out DocumentEntry? latest) || latest.State.Version != currentState.Version)
+                {
+                    _logger.Write(CoreLogLevel.Debug, $"Discarded didChange v{version} for '{uri}': revision advanced during advance.");
+                    _metrics?.RecordPublicationGateHold(publishWatch.ElapsedTicks);
+                    return null;
+                }
+
+                DocumentState next = currentState with
+                {
+                    Version = new DocumentVersion(version),
+                    Text = newText,
+                    BackendSnapshot = snapshot,
+                };
+                _documents[uri] = latest with { State = next };
+                _logger.Write(CoreLogLevel.Debug, $"Changed '{uri}' v{version}: {changes.Count} change(s).");
+                _metrics?.RecordDidChange();
+                _metrics?.RecordSnapshotAdvance();
+                _metrics?.RecordPublicationGateHold(publishWatch.ElapsedTicks);
+                LogTiming("DocumentStore.ApplyChanges", stopwatch, $"uri='{uri}', version={version}, changes={changes.Count}, textLength={newText.Length}", 50);
+                return next;
+            }
         }
     }
 

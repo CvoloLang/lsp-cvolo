@@ -330,7 +330,7 @@ public class DocumentStoreTests
         Assert.Equal(1, metrics.DidChange);
         Assert.Equal(1, metrics.DidClose);
         Assert.Equal(1, metrics.SnapshotAdvances);
-        Assert.Equal(1, metrics.PublicationGateHolds);
+        Assert.Equal(2, metrics.PublicationGateHolds);
         Assert.Contains("didChange=1", metrics.FormatReport());
     }
 
