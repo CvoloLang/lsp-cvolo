@@ -1,4 +1,5 @@
 using Cvolo.LanguageServer.Core;
+using Cvolo.LanguageServer.Core.Instrumentation;
 using Cvolo.LanguageServer.Cvolo;
 using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
@@ -24,6 +25,12 @@ internal sealed class LanguageServer(
     private readonly SessionState _state = new();
     private readonly DiagnosticSink _diagnostics = new(logger);
     private readonly CancellationTokenSource _sessionCancellation = new();
+
+    /// <summary>
+    /// S0 instrumentation for the input/analysis pipeline (INC "Incremental Semantic Snapshots").
+    /// Measurement only; it never influences scheduling or publication.
+    /// </summary>
+    private readonly ServerMetrics _serverMetrics = new();
 
     /// <summary>
     /// Guards publication of every session-scoped member below. Notifications and requests are
@@ -437,7 +444,8 @@ internal sealed class LanguageServer(
         CoreLoggerBridge coreLogger = new(logger);
         return new DocumentStore(
             new CvoloLanguageBackend(folders, root, coreLogger, libraryPaths),
-            coreLogger);
+            coreLogger,
+            _serverMetrics);
     }
 
     private void OnClientTerminated()
@@ -464,6 +472,9 @@ internal sealed class LanguageServer(
     /// </summary>
     internal bool InitializedReceived => _state.InitializedReceived;
 
+    /// <summary>Test-and-operations accessor for the S0 pipeline counters.</summary>
+    internal ServerMetrics Metrics => _serverMetrics;
+
     public void Dispose()
     {
         DisarmClientWatcher();
@@ -473,6 +484,14 @@ internal sealed class LanguageServer(
         _codeActionResolveStore?.Clear();
         _deadClientExitTimer?.Dispose();
         _deadClientExitTimer = null;
+        try
+        {
+            logger.Info(_serverMetrics.FormatReport());
+        }
+        catch
+        {
+        }
+
         _sessionCancellation.Dispose();
     }
 

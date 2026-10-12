@@ -3,6 +3,7 @@ using Cvolo.LanguageServer.Core.Completion;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Core.Editing;
+using Cvolo.LanguageServer.Core.Instrumentation;
 using Cvolo.LanguageServer.Core.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -16,9 +17,10 @@ namespace Cvolo.LanguageServer.Core;
 /// same document are serialized on a per-uri gate; different documents are
 /// independent.
 /// </summary>
-internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logger = null)
+internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logger = null, ServerMetrics? metrics = null)
 {
     private readonly ICoreLogger _logger = logger ?? new NullCoreLogger();
+    private readonly ServerMetrics? _metrics = metrics;
     private readonly ConcurrentDictionary<DocumentUri, DocumentEntry> _documents = new();
     private readonly ConcurrentDictionary<DocumentUri, object> _gates = new();
     private readonly SemaphoreSlim _interactiveQueryGate = new(1, 1);
@@ -82,6 +84,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                 _documents[uri] = new DocumentEntry(state, project, handle);
                 _logger.Write(CoreLogLevel.Info, $"Opened '{uri}' v{version} ({languageId}).");
                 LogTiming("DocumentStore.Open", stopwatch, $"uri='{uri}', version={version}, textLength={effectiveText.Length}", 100);
+                _metrics?.RecordDidOpen();
                 return state;
             }
     }
@@ -96,40 +99,49 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     {
         var stopwatch = Stopwatch.StartNew();
         var gate = _gates.GetOrAdd(uri, static _ => new object());
-        lock (_publicationGate)
-            lock (gate)
-            {
-                if (!_documents.TryGetValue(uri, out DocumentEntry? current))
+        try
+        {
+            lock (_publicationGate)
+                lock (gate)
                 {
-                    _logger.Write(CoreLogLevel.Warning, $"didChange for unopened document '{uri}' ignored.");
-                    return null;
-                }
+                    if (!_documents.TryGetValue(uri, out DocumentEntry? current))
+                    {
+                        _logger.Write(CoreLogLevel.Warning, $"didChange for unopened document '{uri}' ignored.");
+                        return null;
+                    }
 
-                DocumentState currentState = current.State;
-                if (version <= currentState.Version.Value)
-                {
-                    _logger.Write(CoreLogLevel.Warning, $"Stale didChange v{version} for '{uri}' (current v{currentState.Version.Value}) ignored.");
-                    return null;
-                }
+                    DocumentState currentState = current.State;
+                    if (version <= currentState.Version.Value)
+                    {
+                        _logger.Write(CoreLogLevel.Warning, $"Stale didChange v{version} for '{uri}' (current v{currentState.Version.Value}) ignored.");
+                        return null;
+                    }
 
-                if (!IncrementalTextEditor.TryApplyChanges(currentState.Text, changes, out string newText))
-                {
-                    _logger.Write(CoreLogLevel.Warning, $"Invalid range in didChange v{version} for '{uri}'; nothing applied.");
-                    return null;
-                }
+                    if (!IncrementalTextEditor.TryApplyChanges(currentState.Text, changes, out string newText))
+                    {
+                        _logger.Write(CoreLogLevel.Warning, $"Invalid range in didChange v{version} for '{uri}'; nothing applied.");
+                        return null;
+                    }
 
-                BackendSnapshot snapshot = backend.UpdateDocument(current.Project, current.Handle, newText);
-                DocumentState next = currentState with
-                {
-                    Version = new DocumentVersion(version),
-                    Text = newText,
-                    BackendSnapshot = snapshot,
-                };
-                _documents[uri] = current with { State = next };
-                _logger.Write(CoreLogLevel.Debug, $"Changed '{uri}' v{version}: {changes.Count} change(s).");
-                LogTiming("DocumentStore.ApplyChanges", stopwatch, $"uri='{uri}', version={version}, changes={changes.Count}, textLength={newText.Length}", 50);
-                return next;
-            }
+                    BackendSnapshot snapshot = backend.UpdateDocument(current.Project, current.Handle, newText);
+                    DocumentState next = currentState with
+                    {
+                        Version = new DocumentVersion(version),
+                        Text = newText,
+                        BackendSnapshot = snapshot,
+                    };
+                    _documents[uri] = current with { State = next };
+                    _logger.Write(CoreLogLevel.Debug, $"Changed '{uri}' v{version}: {changes.Count} change(s).");
+                    LogTiming("DocumentStore.ApplyChanges", stopwatch, $"uri='{uri}', version={version}, changes={changes.Count}, textLength={newText.Length}", 50);
+                    _metrics?.RecordDidChange();
+                    _metrics?.RecordSnapshotAdvance();
+                    return next;
+                }
+        }
+        finally
+        {
+            _metrics?.RecordPublicationGateHold(stopwatch.ElapsedTicks);
+        }
     }
 
     /// <summary>
@@ -162,6 +174,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
 
                 _logger.Write(CoreLogLevel.Info, $"Closed '{uri}'.");
                 LogTiming("DocumentStore.Close", stopwatch, $"uri='{uri}'", 100);
+                _metrics?.RecordDidClose();
                 return current.Project;
             }
     }
@@ -371,12 +384,14 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
             if (!IsCurrent(context))
             {
                 _logger.Write(CoreLogLevel.Debug, $"[perf] skipped stale {operation} before backend query: uri='{context.Uri}', version={context.Version}");
+                _metrics?.RecordInteractiveQuerySkippedStale();
                 return default;
             }
 
             stopwatch.Restart();
             T result = await Task.Run(query, cancellationToken).ConfigureAwait(false);
             LogTiming("DocumentStore.InteractiveQuery(run)", stopwatch, $"operation={operation}, uri='{context.Uri}', version={context.Version}", 50);
+            _metrics?.RecordInteractiveQueryRun();
             return result;
         }
         finally
@@ -403,6 +418,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
         {
             if (!backend.IsCurrentSnapshot(context.Project, context.CurrentProjectSnapshot))
             {
+                _metrics?.RecordDiagnosticCommitDiscarded();
                 return false;
             }
 
@@ -417,6 +433,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
 
             commit(eligible);
             LogTiming("DocumentStore.TryCommitDiagnostics", stopwatch, $"targets={context.Targets.Count}, eligible={eligible.Count}", 50);
+            _metrics?.RecordDiagnosticCommit();
             return true;
         }
     }

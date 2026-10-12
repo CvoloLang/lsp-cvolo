@@ -3,6 +3,7 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Completion;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
+using Cvolo.LanguageServer.Core.Instrumentation;
 using Cvolo.LanguageServer.Core.Logging;
 using Cvolo.LanguageServer.Tests.TestSupport;
 using Xunit;
@@ -311,6 +312,42 @@ public class DocumentStoreTests
 
         Assert.NotNull(store.ApplyChanges(A, 2, [new DocumentChange(null, "new text")]));
         Assert.False(store.IsCurrent(context));
+    }
+
+    [Fact]
+    public void Metrics_RecordOpenChangeCloseSnapshotAndGateHold()
+    {
+        var metrics = new ServerMetrics();
+        var store = new DocumentStore(new FakeBackend(), new RecordingCoreLogger(), metrics);
+
+        Assert.NotNull(store.Open(A, "cvolo", 1, "text"));
+        Assert.NotNull(store.ApplyChanges(A, 2, [new DocumentChange(null, "new text")]));
+        Assert.True(store.TryCapture(A, out SemanticRequestContext context));
+        store.GetCompletions(context, 2);
+        Assert.NotNull(store.Close(A));
+
+        Assert.Equal(1, metrics.DidOpen);
+        Assert.Equal(1, metrics.DidChange);
+        Assert.Equal(1, metrics.DidClose);
+        Assert.Equal(1, metrics.SnapshotAdvances);
+        Assert.Equal(1, metrics.PublicationGateHolds);
+        Assert.Contains("didChange=1", metrics.FormatReport());
+    }
+
+    [Fact]
+    public async Task Metrics_RecordInteractiveQuerySkippedWhenStale()
+    {
+        var metrics = new ServerMetrics();
+        var store = new DocumentStore(new FakeBackend(), new RecordingCoreLogger(), metrics);
+        Assert.NotNull(store.Open(A, "cvolo", 1, "text"));
+        Assert.True(store.TryCapture(A, out SemanticRequestContext context));
+        Assert.NotNull(store.ApplyChanges(A, 2, [new DocumentChange(null, "new text")]));
+
+        int result = await store.RunInteractiveQueryAsync(context, "hover", () => 1, CancellationToken.None);
+
+        Assert.Equal(0, result);
+        Assert.Equal(1, metrics.InteractiveQueriesSkippedStale);
+        Assert.Equal(0, metrics.InteractiveQueriesRun);
     }
 
     private sealed class FakeBackend : ILanguageBackend
