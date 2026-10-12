@@ -53,6 +53,21 @@ internal interface ILanguageBackend
     /// returned snapshot must be coherent with the new text.
     /// </summary>
     BackendSnapshot UpdateDocument(BackendProject project, BackendDocumentHandle handle, string text);
+
+    /// <summary>
+    /// Computes the next snapshot for a document update without mutating
+    /// session state. Returns (snapshot, proposedGeneration).
+    /// </summary>
+    (BackendSnapshot snapshot, long proposedGeneration) StageDocumentUpdate(BackendProject project, BackendDocumentHandle handle, string text)
+        => (UpdateDocument(project, handle, text), 0);
+
+    /// <summary>
+    /// Commits a previously staged snapshot update. Implementations must verify
+    /// the committed generation matches and update session state atomically.
+    /// </summary>
+    void CommitDocumentUpdate(BackendProject project, BackendDocumentHandle handle, BackendSnapshot snapshot, long generationCommitted)
+    {
+    }
     /// <summary>
     /// Removes <paramref name="document"/>'s overlay, restoring the project
     /// baseline text, and returns the resulting snapshot.

@@ -217,6 +217,41 @@ internal sealed partial class CvoloLanguageBackend(
         }
     }
 
+    public (BackendSnapshot snapshot, long proposedGeneration) StageDocumentUpdate(BackendProject project, BackendDocumentHandle handle, string text)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var session = (CvoloProjectSession)project;
+        var document = (CvoloDocumentHandle)handle;
+
+        lock (session.Gate)
+        {
+            long proposed = session.Generation + 1;
+            ProjectSnapshot next = ComputeSnapshot(session, document.DocumentId, text);
+            LogTiming("StageDocumentUpdate", stopwatch, $"project='{session.Project.ProjectPath}', documentId={document.DocumentId}, textLength={text.Length}, proposed={proposed}", 50);
+            return (new ToolingBackendSnapshot(next, proposed), proposed);
+        }
+    }
+
+    public void CommitDocumentUpdate(BackendProject project, BackendDocumentHandle handle, BackendSnapshot snapshot, long generationCommitted)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var session = (CvoloProjectSession)project;
+        var document = (CvoloDocumentHandle)handle;
+        var toolingSnapshot = (ToolingBackendSnapshot)snapshot;
+
+        lock (session.Gate)
+        {
+            if (generationCommitted <= session.Generation)
+            {
+                // Stale commit - ignore. Generation must be strictly increasing.
+                LogTiming("CommitDocumentUpdate(stale)", stopwatch, $"project='{session.Project.ProjectPath}', documentId={document.DocumentId}, committed={generationCommitted}, current={session.Generation}", 50);
+                return;
+            }
+            session.CommitStaged(toolingSnapshot.Snapshot, generationCommitted);
+            LogTiming("CommitDocumentUpdate", stopwatch, $"project='{session.Project.ProjectPath}', documentId={document.DocumentId}, generation={generationCommitted}", 50);
+        }
+    }
+
     public BackendSnapshot RestoreBaseline(BackendProject project, BackendDocumentHandle handle)
     {
         var session = (CvoloProjectSession)project;
@@ -235,6 +270,13 @@ internal sealed partial class CvoloLanguageBackend(
 
     private ProjectSnapshot AdvanceSnapshot(CvoloProjectSession session, DocumentId documentId, string text)
     {
+        ProjectSnapshot next = ComputeSnapshot(session, documentId, text);
+        session.Advance(next);
+        return next;
+    }
+
+    private ProjectSnapshot ComputeSnapshot(CvoloProjectSession session, DocumentId documentId, string text)
+    {
         if (!session.Current.TryGetDocument(documentId, out DocumentSnapshot? edited))
             return session.Current;
 
@@ -242,14 +284,12 @@ internal sealed partial class CvoloLanguageBackend(
         // the existing project universe. Imports are an exception because they can
         // grow or shrink the library source closure.
         if (!session.IsPackageSource && ImportsChanged(edited.Text.ToString(), text))
-            return AdvanceImportClosure(session, documentId, edited.FilePath, text);
+            return ComputeImportClosure(session, documentId, edited.FilePath, text);
 
-        ProjectSnapshot next = session.Current.WithDocument(documentId, SourceText.From(text));
-        session.Advance(next);
-        return next;
+        return session.Current.WithDocument(documentId, SourceText.From(text));
     }
 
-    private ProjectSnapshot AdvanceImportClosure(CvoloProjectSession session, DocumentId documentId, string filePath, string text)
+    private ProjectSnapshot ComputeImportClosure(CvoloProjectSession session, DocumentId documentId, string filePath, string text)
     {
         var stopwatch = Stopwatch.StartNew();
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -263,9 +303,9 @@ internal sealed partial class CvoloLanguageBackend(
         // from the captured bytes. The rebuild performs zero disk I/O and produces a
         // fresh syntax/context tree, so an imported-file change never aliases the
         // previous generation's analysis.
-        if (TryAdvanceImportClosureFromCapture(session, overrides, out ProjectSnapshot? capturedNext))
+        if (TryComputeImportClosureFromCapture(session, overrides, out ProjectSnapshot? capturedNext))
         {
-            LogTiming("AdvanceImportClosure(capture)", stopwatch, $"file='{filePath}', overrides={overrides.Count}, documents={capturedNext!.Documents.Count}, generation={session.Generation}", 100);
+            LogTiming("ComputeImportClosure(capture)", stopwatch, $"file='{filePath}', overrides={overrides.Count}, documents={capturedNext!.Documents.Count}", 100);
             return capturedNext;
         }
 
@@ -273,20 +313,24 @@ internal sealed partial class CvoloLanguageBackend(
         {
             CvoloProject advanced = session.Project.Advance(overrides);
             session.SetProject(advanced);
-            session.Advance(advanced.InitialSnapshot);
-            LogTiming("AdvanceImportClosure", stopwatch, $"file='{filePath}', overrides={overrides.Count}, documents={session.Current.Documents.Count}, generation={session.Generation}", 100);
+            LogTiming("ComputeImportClosure", stopwatch, $"file='{filePath}', overrides={overrides.Count}, documents={advanced.InitialSnapshot.Documents.Count}", 100);
             return advanced.InitialSnapshot;
         }
         catch (Exception ex)
         {
             _logger.Write(CoreLogLevel.Warning, $"Import closure refresh failed for '{filePath}': {ex.Message}");
-            ProjectSnapshot fallback = session.Current.WithDocument(documentId, SourceText.From(text));
-            session.Advance(fallback);
-            return fallback;
+            return session.Current.WithDocument(documentId, SourceText.From(text));
         }
     }
 
-    private bool TryAdvanceImportClosureFromCapture(
+    private ProjectSnapshot AdvanceImportClosure(CvoloProjectSession session, DocumentId documentId, string filePath, string text)
+    {
+        ProjectSnapshot next = ComputeImportClosure(session, documentId, filePath, text);
+        session.Advance(next);
+        return next;
+    }
+
+    private bool TryComputeImportClosureFromCapture(
         CvoloProjectSession session,
         IReadOnlyDictionary<string, string> overrides,
         out ProjectSnapshot? next)
@@ -305,7 +349,6 @@ internal sealed partial class CvoloLanguageBackend(
                 return false;
 
             session.SetProject(ready.Project);
-            session.Advance(ready.Snapshot);
             next = ready.Snapshot;
             return true;
         }
@@ -316,6 +359,16 @@ internal sealed partial class CvoloLanguageBackend(
             _logger.Write(CoreLogLevel.Debug, $"Capture-based import closure refresh unavailable: {ex.Message}");
             return false;
         }
+    }
+
+    private bool TryAdvanceImportClosureFromCapture(CvoloProjectSession session, IReadOnlyDictionary<string, string> overrides, out ProjectSnapshot? next)
+    {
+        if (TryComputeImportClosureFromCapture(session, overrides, out next))
+        {
+            session.Advance(next!);
+            return true;
+        }
+        return false;
     }
 
     private static bool ImportsChanged(string before, string after)
@@ -1209,6 +1262,17 @@ internal sealed class CvoloProjectSession : BackendProject
     {
         Current = snapshot;
         Generation++;
+        Analysis?.Request(snapshot, Generation);
+    }
+
+    /// <summary>
+    /// Commits a staged snapshot at the specified generation without incrementing.
+    /// Callers must hold <see cref="Gate"/>.
+    /// </summary>
+    public void CommitStaged(ProjectSnapshot snapshot, long generation)
+    {
+        Current = snapshot;
+        Generation = generation;
         Analysis?.Request(snapshot, Generation);
     }
 }

@@ -32,6 +32,15 @@ internal sealed class CvoloLanguageBackend(IReadOnlyList<string> workspaceFolder
         throw new InvalidOperationException("Cvolo compiler tooling is unavailable.");
     }
 
+    public (BackendSnapshot snapshot, long proposedGeneration) StageDocumentUpdate(BackendProject project, BackendDocumentHandle handle, string text)
+    {
+        throw new InvalidOperationException("Cvolo compiler tooling is unavailable.");
+    }
+
+    public void CommitDocumentUpdate(BackendProject project, BackendDocumentHandle handle, BackendSnapshot snapshot, long generationCommitted)
+    {
+    }
+
     public BackendSnapshot RestoreBaseline(BackendProject project, BackendDocumentHandle handle)
     {
         throw new InvalidOperationException("Cvolo compiler tooling is unavailable.");
