@@ -49,30 +49,49 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     {
         var stopwatch = Stopwatch.StartNew();
         var gate = _gates.GetOrAdd(uri, static _ => new object());
-        lock (_publicationGate)
-            lock (gate)
+        lock (gate)
+        {
+            // Short input transaction: reject duplicate opens without holding the
+            // publication gate while the backend discovers the project, reads
+            // files and parses (INC S1: no Tooling call or I/O in publication
+            // gates). The per-uri gate serializes concurrent opens of one uri.
+            lock (_publicationGate)
             {
+                _metrics?.RecordPublicationGateHold(stopwatch.ElapsedTicks);
                 if (_documents.ContainsKey(uri))
                 {
                     _logger.Write(CoreLogLevel.Warning, $"Duplicate didOpen ignored for '{uri}'.");
                     return null;
                 }
+            }
 
-                BackendProject? project = backend.OpenProject(uri);
-                if (project is null)
+            BackendProject? project = backend.OpenProject(uri);
+            if (project is null)
+            {
+                _logger.Write(CoreLogLevel.Warning, $"No backend project for '{uri}'; didOpen suppressed.");
+                return null;
+            }
+
+            if (!backend.TryResolveDocument(project, uri, out BackendDocumentHandle? handle))
+            {
+                _logger.Write(CoreLogLevel.Error, $"Backend could not resolve '{uri}' in its project; didOpen suppressed.");
+                return null;
+            }
+
+            var effectiveText = text ?? string.Empty;
+            BackendSnapshot snapshot = backend.UpdateDocument(project, handle, effectiveText);
+
+            // Publish the opened document in a second short transaction.
+            var publishWatch = Stopwatch.StartNew();
+            lock (_publicationGate)
+            {
+                if (_documents.ContainsKey(uri))
                 {
-                    _logger.Write(CoreLogLevel.Warning, $"No backend project for '{uri}'; didOpen suppressed.");
+                    _logger.Write(CoreLogLevel.Warning, $"Duplicate didOpen ignored for '{uri}'.");
+                    _metrics?.RecordPublicationGateHold(publishWatch.ElapsedTicks);
                     return null;
                 }
 
-                if (!backend.TryResolveDocument(project, uri, out BackendDocumentHandle? handle))
-                {
-                    _logger.Write(CoreLogLevel.Error, $"Backend could not resolve '{uri}' in its project; didOpen suppressed.");
-                    return null;
-                }
-
-                var effectiveText = text ?? string.Empty;
-                BackendSnapshot snapshot = backend.UpdateDocument(project, handle, effectiveText);
                 var state = new DocumentState(
                     uri,
                     DocumentSessionId.Next(),
@@ -83,10 +102,12 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                     snapshot);
                 _documents[uri] = new DocumentEntry(state, project, handle);
                 _logger.Write(CoreLogLevel.Info, $"Opened '{uri}' v{version} ({languageId}).");
+                _metrics?.RecordPublicationGateHold(publishWatch.ElapsedTicks);
                 LogTiming("DocumentStore.Open", stopwatch, $"uri='{uri}', version={version}, textLength={effectiveText.Length}", 100);
                 _metrics?.RecordDidOpen();
                 return state;
             }
+        }
     }
 
     /// <summary>
@@ -181,29 +202,40 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     {
         var stopwatch = Stopwatch.StartNew();
         var gate = _gates.GetOrAdd(uri, static _ => new object());
-        lock (_publicationGate)
-            lock (gate)
+        lock (gate)
+        {
+            // Short input transaction: remove the overlay and capture the backend
+            // handles, then restore the baseline outside the publication gate so
+            // the backend's disk/parse work cannot stall input publication.
+            BackendProject project;
+            BackendDocumentHandle handle;
+            lock (_publicationGate)
             {
+                _metrics?.RecordPublicationGateHold(stopwatch.ElapsedTicks);
                 if (!_documents.TryRemove(uri, out DocumentEntry? current))
                 {
                     _logger.Write(CoreLogLevel.Warning, $"didClose for unopened document '{uri}' ignored.");
                     return null;
                 }
 
-                try
-                {
-                    backend.RestoreBaseline(current.Project, current.Handle);
-                }
-                catch (Exception ex)
-                {
-                    _logger.Write(CoreLogLevel.Error, $"Restoring baseline for '{uri}' failed: {ex.Message}");
-                }
-
-                _logger.Write(CoreLogLevel.Info, $"Closed '{uri}'.");
-                LogTiming("DocumentStore.Close", stopwatch, $"uri='{uri}'", 100);
-                _metrics?.RecordDidClose();
-                return current.Project;
+                project = current.Project;
+                handle = current.Handle;
             }
+
+            try
+            {
+                backend.RestoreBaseline(project, handle);
+            }
+            catch (Exception ex)
+            {
+                _logger.Write(CoreLogLevel.Error, $"Restoring baseline for '{uri}' failed: {ex.Message}");
+            }
+
+            _logger.Write(CoreLogLevel.Info, $"Closed '{uri}'.");
+            LogTiming("DocumentStore.Close", stopwatch, $"uri='{uri}'", 100);
+            _metrics?.RecordDidClose();
+            return project;
+        }
     }
 
     public bool TryGet(DocumentUri uri, out DocumentState state)
