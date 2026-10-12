@@ -24,6 +24,10 @@ internal sealed class ServerMetrics
     private long _publicationGateHolds;
     private long _publicationGateHoldTicks;
     private long _publicationGateHoldMaxTicks;
+    private long _analysisRunsStarted;
+    private long _analysisRunsCompleted;
+    private long _analysisRunsFailed;
+    private long _interactiveQueriesOnPendingGeneration;
 
     public long DidOpen => Interlocked.Read(ref _didOpen);
 
@@ -64,6 +68,24 @@ internal sealed class ServerMetrics
 
     public void RecordDiagnosticCommitDiscarded() => Interlocked.Increment(ref _diagnosticCommitsDiscarded);
 
+    /// <summary>Background generation analyses started (migration stage S4).</summary>
+    public long AnalysisRunsStarted => Interlocked.Read(ref _analysisRunsStarted);
+
+    public long AnalysisRunsCompleted => Interlocked.Read(ref _analysisRunsCompleted);
+
+    public long AnalysisRunsFailed => Interlocked.Read(ref _analysisRunsFailed);
+
+    /// <summary>Interactive queries that ran before the generation's full analysis was ready.</summary>
+    public long InteractiveQueriesOnPendingGeneration => Interlocked.Read(ref _interactiveQueriesOnPendingGeneration);
+
+    public void RecordAnalysisRunStarted() => Interlocked.Increment(ref _analysisRunsStarted);
+
+    public void RecordAnalysisRunCompleted() => Interlocked.Increment(ref _analysisRunsCompleted);
+
+    public void RecordAnalysisRunFailed() => Interlocked.Increment(ref _analysisRunsFailed);
+
+    public void RecordInteractiveQueryOnPendingGeneration() => Interlocked.Increment(ref _interactiveQueriesOnPendingGeneration);
+
     /// <summary>Records one acquisition of the document publication gate and how long it was held.</summary>
     public void RecordPublicationGateHold(long elapsedStopwatchTicks)
     {
@@ -83,7 +105,11 @@ internal sealed class ServerMetrics
         DiagnosticCommitsDiscarded,
         PublicationGateHolds,
         PublicationGateHoldTotalMs,
-        PublicationGateHoldMaxMs);
+        PublicationGateHoldMaxMs,
+        AnalysisRunsStarted,
+        AnalysisRunsCompleted,
+        AnalysisRunsFailed,
+        InteractiveQueriesOnPendingGeneration);
 
     /// <summary>Renders a single-line, log-friendly report of the current counters.</summary>
     public string FormatReport()
@@ -96,6 +122,10 @@ internal sealed class ServerMetrics
             .Append(" snapshotAdvances=").Append(s.SnapshotAdvances)
             .Append(" interactiveQueriesRun=").Append(s.InteractiveQueriesRun)
             .Append(" interactiveQueriesSkippedStale=").Append(s.InteractiveQueriesSkippedStale)
+            .Append(" interactiveQueriesOnPendingGeneration=").Append(s.InteractiveQueriesOnPendingGeneration)
+            .Append(" analysisRunsStarted=").Append(s.AnalysisRunsStarted)
+            .Append(" analysisRunsCompleted=").Append(s.AnalysisRunsCompleted)
+            .Append(" analysisRunsFailed=").Append(s.AnalysisRunsFailed)
             .Append(" diagnosticCommits=").Append(s.DiagnosticCommits)
             .Append(" diagnosticCommitsDiscarded=").Append(s.DiagnosticCommitsDiscarded)
             .Append(" publicationGateHolds=").Append(s.PublicationGateHolds)
@@ -134,4 +164,8 @@ internal readonly record struct ServerMetricsSnapshot(
     long DiagnosticCommitsDiscarded,
     long PublicationGateHolds,
     double PublicationGateHoldTotalMs,
-    double PublicationGateHoldMaxMs);
+    double PublicationGateHoldMaxMs,
+    long AnalysisRunsStarted,
+    long AnalysisRunsCompleted,
+    long AnalysisRunsFailed,
+    long InteractiveQueriesOnPendingGeneration);

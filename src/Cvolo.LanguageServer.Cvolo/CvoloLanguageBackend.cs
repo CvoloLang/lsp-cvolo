@@ -5,6 +5,7 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Completion;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
+using Cvolo.LanguageServer.Core.Instrumentation;
 using Cvolo.LanguageServer.Core.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -23,11 +24,13 @@ internal sealed partial class CvoloLanguageBackend(
     IReadOnlyList<string> workspaceFolders,
     string? fallbackRoot,
     ICoreLogger? logger = null,
-    IReadOnlyList<string>? libraryPaths = null) : ILanguageBackend
+    IReadOnlyList<string>? libraryPaths = null,
+    ServerMetrics? metrics = null) : ILanguageBackend
 {
     private readonly ICoreLogger _logger = logger ?? new NullCoreLogger();
     private readonly string? _fallbackRoot = fallbackRoot;
     private readonly IReadOnlyList<string> _libraryPaths = libraryPaths ?? Array.Empty<string>();
+    private readonly ServerMetrics? _metrics = metrics;
     private readonly ConcurrentDictionary<string, CvoloProjectSession> _sessions = new();
 
     private void LogTiming(string operation, Stopwatch stopwatch, string detail, int thresholdMs = 50)
@@ -107,7 +110,10 @@ internal sealed partial class CvoloLanguageBackend(
             CoreLogLevel.Info,
             $"Opened package source session '{source.PackageId}@{source.Version}' for '{owner.Project.ProjectPath}'.");
         LogTiming("BuildPackageSession", stopwatch, $"package='{source.PackageId}@{source.Version}', sources={sources.Count}, owner='{owner.Project.ProjectPath}'", 100);
-        return new CvoloProjectSession(workspace, project, isPackageSource: true);
+        return new CvoloProjectSession(workspace, project, isPackageSource: true)
+        {
+            Analysis = new GenerationAnalysisRegistry(_metrics),
+        };
     }
 
     private bool TryFindOwningSession(string path, out CvoloProjectSession session)
@@ -395,6 +401,18 @@ internal sealed partial class CvoloLanguageBackend(
         }
     }
 
+    public bool IsAnalysisReady(BackendProject project)
+    {
+        var session = (CvoloProjectSession)project;
+        long generation;
+        lock (session.Gate)
+        {
+            generation = session.Generation;
+        }
+
+        return session.Analysis?.IsReady(generation) ?? true;
+    }
+
     public BackendDiagnosticRun GetDiagnostics(BackendSnapshot snapshot, IReadOnlyList<BackendDocumentHandle> targets)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -507,7 +525,10 @@ internal sealed partial class CvoloLanguageBackend(
                 ? $"Opened loose Cvolo workspace '{semanticRoot}' with {_libraryPaths.Count} configured library path(s)."
                 : $"Opened Cvolo project '{semanticRoot}' from .cvlproj package/project metadata.");
         LogTiming("CreateSession", stopwatch, $"root='{semanticRoot}', loose={looseWorkspace}, documents={project.InitialSnapshot.Documents.Count}", 100);
-        return new CvoloProjectSession(workspace, project);
+        return new CvoloProjectSession(workspace, project)
+        {
+            Analysis = new GenerationAnalysisRegistry(_metrics),
+        };
     }
 
     /// <summary>
@@ -1174,6 +1195,13 @@ internal sealed class CvoloProjectSession : BackendProject
     public object Gate { get; } = new();
 
     /// <summary>
+    /// Optional background generation-analysis registry. When present, every
+    /// committed advance requests a single-flight full analysis of the newest
+    /// generation (migration stage S4).
+    /// </summary>
+    public GenerationAnalysisRegistry? Analysis { get; init; }
+
+    /// <summary>
     /// Publishes <paramref name="snapshot"/> as the new current snapshot and
     /// increments the generation. Callers must hold <see cref="Gate"/>.
     /// </summary>
@@ -1181,6 +1209,7 @@ internal sealed class CvoloProjectSession : BackendProject
     {
         Current = snapshot;
         Generation++;
+        Analysis?.Request(snapshot, Generation);
     }
 }
 

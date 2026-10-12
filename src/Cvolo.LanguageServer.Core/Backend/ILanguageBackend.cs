@@ -79,6 +79,14 @@ internal interface ILanguageBackend
     /// </summary>
     bool IsCurrentSnapshot(BackendProject project, BackendSnapshot snapshot);
     /// <summary>
+    /// Reports whether the project's current generation has completed a full
+    /// analysis (migration stage S4). A backend that does not run background
+    /// analysis reports every generation ready. Interactive requests may still
+    /// compute a result when this returns false — the flag only records that the
+    /// generation's one shared analysis has not finished warming up yet.
+    /// </summary>
+    bool IsAnalysisReady(BackendProject project) => true;
+    /// <summary>
     /// Computes diagnostics for <paramref name="targets"/> from
     /// <paramref name="snapshot"/>. Every call must use that same snapshot so
     /// one project analysis backs the whole result.

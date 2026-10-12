@@ -447,6 +447,11 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                 return default;
             }
 
+            if (_metrics is not null && !backend.IsAnalysisReady(context.Project))
+            {
+                _metrics.RecordInteractiveQueryOnPendingGeneration();
+            }
+
             stopwatch.Restart();
             T result = await Task.Run(query, cancellationToken).ConfigureAwait(false);
             LogTiming("DocumentStore.InteractiveQuery(run)", stopwatch, $"operation={operation}, uri='{context.Uri}', version={context.Version}", 50);

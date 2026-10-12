@@ -443,7 +443,7 @@ internal sealed class LanguageServer(
 
         CoreLoggerBridge coreLogger = new(logger);
         return new DocumentStore(
-            new CvoloLanguageBackend(folders, root, coreLogger, libraryPaths),
+            new CvoloLanguageBackend(folders, root, coreLogger, libraryPaths, _serverMetrics),
             coreLogger,
             _serverMetrics);
     }
