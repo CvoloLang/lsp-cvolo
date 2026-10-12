@@ -38,6 +38,8 @@ internal sealed class FoldingRangeHandler(ILspLogger logger, Func<DocumentStore>
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[foldingRange] '{documentUri}' is not open; no regions.");

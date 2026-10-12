@@ -50,6 +50,8 @@ internal sealed class TypeLayoutHandler(ILspLogger logger, Func<DocumentStore> s
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[typeLayout] '{documentUri}' is not open; no layout.");

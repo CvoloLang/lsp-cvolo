@@ -5,6 +5,7 @@ using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Core.Editing;
 using Cvolo.LanguageServer.Core.Instrumentation;
 using Cvolo.LanguageServer.Core.Logging;
+using Cvolo.LanguageServer.Core.Scheduling;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
@@ -39,6 +40,44 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     }
 
     public ICollection<DocumentUri> OpenUris => _documents.Keys;
+
+    private IInputBarrier? _inputBarrier;
+
+    /// <summary>
+    /// Read barrier for ordered input publication (INC "LSP Request Scheduling").
+    /// Assigned by the session composition; null when handlers are invoked directly
+    /// (for example in unit tests without a transport).
+    /// </summary>
+    public IInputBarrier? InputBarrier
+    {
+        get => Volatile.Read(ref _inputBarrier);
+        set => Volatile.Write(ref _inputBarrier, value);
+    }
+
+    /// <summary>
+    /// Bounded wait for this request's earlier admitted inputs. Returns false when
+    /// the barrier times out so the caller can answer with a recoverable
+    /// non-success instead of guessing at semantics.
+    /// </summary>
+    public async Task<bool> WaitForInputsAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        IInputBarrier? barrier = Volatile.Read(ref _inputBarrier);
+        if (barrier is null)
+        {
+            return true;
+        }
+
+        IngressSequence sequence = IngressScope.Current;
+        if (sequence.IsNone)
+        {
+            return true;
+        }
+
+        BarrierOutcome outcome = await barrier
+            .WaitForInputsBeforeAsync(sequence, timeout, cancellationToken)
+            .ConfigureAwait(false);
+        return outcome == BarrierOutcome.Satisfied;
+    }
 
     /// <summary>
     /// Opens a document with the editor's authoritative text. Returns null and

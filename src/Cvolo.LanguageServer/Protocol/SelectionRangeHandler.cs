@@ -46,6 +46,8 @@ internal sealed class SelectionRangeHandler(ILspLogger logger, Func<DocumentStor
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[selectionRange] '{documentUri}' is not open; no chains.");

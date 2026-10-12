@@ -37,6 +37,8 @@ internal sealed class PrepareTypeHierarchyHandler(ILspLogger logger, Func<Docume
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[prepareTypeHierarchy] '{documentUri}' is not open; no item.");

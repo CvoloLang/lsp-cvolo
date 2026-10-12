@@ -33,6 +33,8 @@ internal sealed class SignatureHelpHandler(
             return null;
 
         cancellationToken.ThrowIfCancellationRequested();
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
             return null;
 

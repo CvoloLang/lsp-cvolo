@@ -44,6 +44,8 @@ internal sealed class ImplementationHandler(ILspLogger logger, Func<DocumentStor
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[implementation] '{documentUri}' is not open; no target.");

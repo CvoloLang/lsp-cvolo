@@ -1,6 +1,7 @@
 #if CVOLO_MANAGED_TOOLING
 using Cvolo.Compiler.Tooling;
 #endif
+using Cvolo.LanguageServer.Core.Scheduling;
 using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
 using Cvolo.LanguageServer.Protocol;
@@ -49,7 +50,10 @@ internal static class ServerPipeline
         }
 
         using HeaderDelimitedMessageHandler handler = new(stdout, stdin, formatter);
+        IngressPipeline ingress = new();
+        server.Ingress = ingress;
         JsonRpc rpc = new(handler);
+        rpc.SynchronizationContext = new IngressSynchronizationContext(ingress);
         server.Diagnostics.Attach(rpc);
         server.Refresh.Attach(rpc);
         server.EditorIntelligenceRefresh.Attach(rpc);

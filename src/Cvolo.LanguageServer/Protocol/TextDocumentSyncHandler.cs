@@ -1,6 +1,7 @@
 using Cvolo.LanguageServer.Core;
 using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Documents;
+using Cvolo.LanguageServer.Core.Scheduling;
 using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
@@ -16,11 +17,19 @@ namespace Cvolo.LanguageServer.Protocol;
 /// schedules diagnostics, and never emits responses. All failures are
 /// non-fatal: the server stays alive and simply does not publish state.
 /// </summary>
+/// <remarks>
+/// Each notification is routed through the session <see cref="OrderedInputQueue"/>
+/// using its <see cref="IngressScope"/> sequence, so inputs are applied in the
+/// order the frames were received even though handlers are dispatched
+/// concurrently. The admitted frame is always applied or rejected, so a later
+/// read request's barrier never waits forever on this notification.
+/// </remarks>
 internal sealed class TextDocumentSyncHandler(
     ILspLogger logger,
     DiagnosticSink diagnostics,
     Func<DocumentStore> storeAccessor,
-    Action? onProjectChanged = null) : IDisposable
+    Action? onProjectChanged = null,
+    Func<OrderedInputQueue?>? inputQueueAccessor = null) : IDisposable
 {
     private const string CvoloLanguageId = "cvolo";
 
@@ -63,24 +72,52 @@ internal sealed class TextDocumentSyncHandler(
 
     [JsonRpcMethod(Methods.TextDocumentDidOpenName, UseSingleObjectParameterDeserialization = true)]
     public void DidOpen(DidOpenTextDocumentParams? parameters)
+        => DispatchInput(IngressScope.Current, () => ApplyDidOpen(parameters));
+
+    [JsonRpcMethod(Methods.TextDocumentDidChangeName, UseSingleObjectParameterDeserialization = true)]
+    public void DidChange(DidChangeTextDocumentParams? parameters)
+        => DispatchInput(IngressScope.Current, () => ApplyDidChange(parameters));
+
+    [JsonRpcMethod(Methods.TextDocumentDidCloseName, UseSingleObjectParameterDeserialization = true)]
+    public void DidClose(DidCloseTextDocumentParams? parameters)
+        => DispatchInput(IngressScope.Current, () => ApplyDidClose(parameters));
+
+    /// <summary>
+    /// Applies an input through the ordered writer when an ingress queue is present;
+    /// otherwise (direct/unit invocation) applies it immediately. The apply function
+    /// always reports applied or rejected so the admitted frame always settles.
+    /// </summary>
+    private void DispatchInput(IngressSequence sequence, Func<InputDisposition> apply)
+    {
+        OrderedInputQueue? queue = inputQueueAccessor?.Invoke();
+        if (queue is null || sequence.IsNone)
+        {
+            apply();
+            return;
+        }
+
+        queue.Attach(sequence, apply);
+    }
+
+    private InputDisposition ApplyDidOpen(DidOpenTextDocumentParams? parameters)
     {
         var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } item)
         {
             logger.Warning("didOpen without a textDocument; ignored.");
-            return;
+            return InputDisposition.Rejected;
         }
 
         if (!TryCreateDocumentUri(item.Uri, out DocumentUri documentUri))
         {
             logger.Debug($"didOpen for a non-file document ('{item.Uri}') ignored.");
-            return;
+            return InputDisposition.Rejected;
         }
 
         if (!IsCvoloDocument(documentUri))
         {
             logger.Debug($"didOpen for non-cvolo document '{documentUri}' ignored.");
-            return;
+            return InputDisposition.Rejected;
         }
 
         if (!string.Equals(item.LanguageId, CvoloLanguageId, StringComparison.OrdinalIgnoreCase))
@@ -91,41 +128,41 @@ internal sealed class TextDocumentSyncHandler(
         if (Store.Open(documentUri, item.LanguageId, item.Version, item.Text) is null)
         {
             logger.Warning($"[diag] didOpen for '{documentUri}' was rejected; diagnostics not scheduled.");
-            return;
+            return InputDisposition.Rejected;
         }
         LogTiming("didOpen/store", stopwatch, documentUri, 100);
 
         if (!Store.TryGetProject(documentUri, out BackendProject? project))
         {
             logger.Warning($"[diag] no backend project for '{documentUri}'; diagnostics not scheduled.");
-            return;
+            return InputDisposition.Applied;
         }
 
         logger.Info($"[diag] didOpen '{documentUri}' v{item.Version}; scheduling diagnostics.");
         Scheduler.Schedule(project);
         onProjectChanged?.Invoke();
         LogTiming("didOpen/total", stopwatch, documentUri, 100);
+        return InputDisposition.Applied;
     }
 
-    [JsonRpcMethod(Methods.TextDocumentDidChangeName, UseSingleObjectParameterDeserialization = true)]
-    public void DidChange(DidChangeTextDocumentParams? parameters)
+    private InputDisposition ApplyDidChange(DidChangeTextDocumentParams? parameters)
     {
         var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } textDocument || parameters.ContentChanges is null)
         {
             logger.Warning("didChange without a textDocument or contentChanges; ignored.");
-            return;
+            return InputDisposition.Rejected;
         }
 
         if (!TryCreateDocumentUri(textDocument.Uri, out DocumentUri documentUri))
         {
             logger.Debug($"didChange for a non-file document ('{textDocument.Uri}') ignored.");
-            return;
+            return InputDisposition.Rejected;
         }
 
         if (!IsCvoloDocument(documentUri))
         {
-            return;
+            return InputDisposition.Rejected;
         }
 
         var changes = new List<DocumentChange>(parameters.ContentChanges.Length);
@@ -138,48 +175,48 @@ internal sealed class TextDocumentSyncHandler(
         if (Store.ApplyChanges(documentUri, textDocument.Version, changes) is null)
         {
             logger.Debug($"[diag] didChange for '{documentUri}' v{textDocument.Version} was not applied; diagnostics not scheduled.");
-            return;
+            return InputDisposition.Rejected;
         }
         LogTiming("didChange/store", stopwatch, documentUri);
 
         if (!Store.TryGetProject(documentUri, out BackendProject? project))
         {
             logger.Warning($"[diag] no backend project for '{documentUri}'; diagnostics not scheduled.");
-            return;
+            return InputDisposition.Applied;
         }
 
         logger.Info($"[diag] didChange '{documentUri}' v{textDocument.Version}; scheduling diagnostics.");
         Scheduler.Schedule(project);
         onProjectChanged?.Invoke();
         LogTiming("didChange/total", stopwatch, documentUri);
+        return InputDisposition.Applied;
     }
 
-    [JsonRpcMethod(Methods.TextDocumentDidCloseName, UseSingleObjectParameterDeserialization = true)]
-    public void DidClose(DidCloseTextDocumentParams? parameters)
+    private InputDisposition ApplyDidClose(DidCloseTextDocumentParams? parameters)
     {
         var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } textDocument)
         {
             logger.Warning("didClose without a textDocument; ignored.");
-            return;
+            return InputDisposition.Rejected;
         }
 
         if (!TryCreateDocumentUri(textDocument.Uri, out DocumentUri documentUri))
         {
             logger.Debug($"didClose for a non-file document ('{textDocument.Uri}') ignored.");
-            return;
+            return InputDisposition.Rejected;
         }
 
         if (!IsCvoloDocument(documentUri))
         {
-            return;
+            return InputDisposition.Rejected;
         }
 
         BackendProject? project = Store.Close(documentUri);
         if (project is null)
         {
             logger.Debug($"[diag] didClose for '{documentUri}' ignored; document was not open.");
-            return;
+            return InputDisposition.Rejected;
         }
         LogTiming("didClose/store", stopwatch, documentUri, 100);
 
@@ -196,6 +233,7 @@ internal sealed class TextDocumentSyncHandler(
 
         onProjectChanged?.Invoke();
         LogTiming("didClose/total", stopwatch, documentUri, 100);
+        return InputDisposition.Applied;
     }
 
     private void LogTiming(string phase, Stopwatch stopwatch, DocumentUri uri, int thresholdMs = 50)

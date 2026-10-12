@@ -67,6 +67,8 @@ internal sealed class CompletionHandler(
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[completion] '{documentUri}' is not open; no completion.");

@@ -313,6 +313,8 @@ internal sealed class SemanticTokensRequestsPayload
 internal sealed class PublishDiagnosticsClientCapabilitiesPayload
 {
     public bool? RelatedInformation { get; init; }
+
+    public bool? VersionSupport { get; init; }
 }
 
 /// <summary>

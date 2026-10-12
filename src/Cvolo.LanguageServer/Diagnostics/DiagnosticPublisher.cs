@@ -69,6 +69,7 @@ internal sealed class DiagnosticPublisher(ILspLogger logger, DiagnosticSink sink
             byDocument.TryGetValue(target.Uri, out List<DiagnosticPayload>? list);
             payloads.Add(new PublishDiagnosticsPayload(
                 ToUri(target.Uri),
+                sink.VersionSupported ? target.Version.Value : null,
                 list?.ToArray() ?? Array.Empty<DiagnosticPayload>()));
         }
 
@@ -85,7 +86,7 @@ internal sealed class DiagnosticPublisher(ILspLogger logger, DiagnosticSink sink
 
     public void PublishEmpty(DocumentUri uri)
     {
-        sink.Publish(new PublishDiagnosticsPayload(ToUri(uri), Array.Empty<DiagnosticPayload>()));
+        sink.Publish(new PublishDiagnosticsPayload(ToUri(uri), null, Array.Empty<DiagnosticPayload>()));
     }
 
     private bool TryMap(BackendDiagnostic diagnostic, IReadOnlyDictionary<DocumentUri, LineIndex> indexes, out DiagnosticPayload mapped)

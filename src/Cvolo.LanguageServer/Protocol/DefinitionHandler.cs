@@ -42,6 +42,8 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[definition] '{documentUri}' is not open; no definition.");

@@ -25,6 +25,8 @@ internal sealed class RenameHandler(
     [JsonRpcMethod("textDocument/prepareRename", UseSingleObjectParameterDeserialization = true)]
     public async Task<PrepareRenameResultPayload?> PrepareRename(PrepareRenameParamsPayload? parameters, CancellationToken cancellationToken)
     {
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!TryCapture(parameters?.TextDocument, parameters?.Position, out DocumentUri documentUri, out SemanticRequestContext context, out int offset))
             return null;
 
@@ -59,6 +61,8 @@ internal sealed class RenameHandler(
     {
         if (parameters?.TextDocument is not { } textDocument || parameters.Position is not { } position || parameters.NewName is null)
             throw RequestFailed("Invalid rename request.");
+
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
 
         if (!TextDocumentSyncHandler.TryCreateDocumentUri(textDocument.Uri, out DocumentUri documentUri)
             || !TextDocumentSyncHandler.IsCvoloDocument(documentUri)

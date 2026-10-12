@@ -45,6 +45,8 @@ internal sealed class SemanticTokensHandler(
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[semanticTokens] '{documentUri}' is not open; no tokens.");

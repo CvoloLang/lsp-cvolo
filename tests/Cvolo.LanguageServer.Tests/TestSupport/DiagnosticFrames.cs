@@ -3,7 +3,7 @@ using Newtonsoft.Json.Linq;
 namespace Cvolo.LanguageServer.Tests.TestSupport;
 
 /// <summary>Published diagnostics parsed out of server frames.</summary>
-internal sealed record PublishedDiagnostics(string Uri, JArray Diagnostics)
+internal sealed record PublishedDiagnostics(string Uri, JArray Diagnostics, int? Version)
 {
     public int Count => Diagnostics.Count;
 }
@@ -40,7 +40,8 @@ internal static class DiagnosticFrames
 
             published.Add(new PublishedDiagnostics(
                 parameters["uri"]?.Value<string>() ?? string.Empty,
-                parameters["diagnostics"] as JArray ?? []));
+                parameters["diagnostics"] as JArray ?? [],
+                parameters["version"]?.Value<int?>()));
         }
 
         return published;

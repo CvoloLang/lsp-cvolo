@@ -42,6 +42,8 @@ internal sealed class TypeDefinitionHandler(ILspLogger logger, Func<DocumentStor
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[typeDefinition] '{documentUri}' is not open; no target.");

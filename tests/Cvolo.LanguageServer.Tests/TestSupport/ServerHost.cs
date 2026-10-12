@@ -1,4 +1,6 @@
 using Cvolo.LanguageServer.Core;
+using Cvolo.LanguageServer.Core.Scheduling;
+using Cvolo.LanguageServer.Cli;
 using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
 using Cvolo.LanguageServer.Protocol;
@@ -52,7 +54,10 @@ internal sealed class ServerHost : IDisposable
         formatter.JsonSerializer.NullValueHandling = NullValueHandling.Ignore;
         formatter.JsonSerializer.Converters.Add(new UriJsonConverter());
         HeaderDelimitedMessageHandler handler = new(serverOutput, transport.ServerInput, formatter);
+        IngressPipeline ingress = new();
+        server.Ingress = ingress;
         JsonRpc rpc = new(handler);
+        rpc.SynchronizationContext = new IngressSynchronizationContext(ingress);
         server.Diagnostics.Attach(rpc);
         server.Refresh.Attach(rpc);
         server.EditorIntelligenceRefresh.Attach(rpc);

@@ -1,5 +1,6 @@
 using Cvolo.LanguageServer.Core;
 using Cvolo.LanguageServer.Core.Instrumentation;
+using Cvolo.LanguageServer.Core.Scheduling;
 using Cvolo.LanguageServer.Cvolo;
 using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
@@ -27,6 +28,14 @@ internal sealed class LanguageServer(
     private readonly CancellationTokenSource _sessionCancellation = new();
 
     /// <summary>
+    /// The ingress boundary for this session (INC "LSP Request Scheduling"). The
+    /// transport composition sets it before the endpoint starts listening; request
+    /// handlers read it to wait at the input read barrier. Null in unit contexts
+    /// that drive handlers directly.
+    /// </summary>
+    private IngressPipeline? _ingress;
+
+    /// <summary>
     /// S0 instrumentation for the input/analysis pipeline (INC "Incremental Semantic Snapshots").
     /// Measurement only; it never influences scheduling or publication.
     /// </summary>
@@ -41,8 +50,7 @@ internal sealed class LanguageServer(
 
     private DocumentStore? _store;
     private CompletionResolveStore? _resolveStore;
-    private TextDocumentSyncHandler? _sync;
-    private CompletionHandler? _completion;
+    private TextDocumentSyncHandler? _sync;    private CompletionHandler? _completion;
     private SignatureHelpHandler? _signatureHelp;
     private HoverHandler? _hover;
     private DefinitionHandler? _definition;
@@ -75,6 +83,16 @@ internal sealed class LanguageServer(
     internal DiagnosticSink Diagnostics => _diagnostics;
 
     /// <summary>
+    /// Session ingress boundary. Assigned by the transport composition root before
+    /// the JSON-RPC endpoint starts listening.
+    /// </summary>
+    internal IngressPipeline? Ingress
+    {
+        get => Volatile.Read(ref _ingress);
+        set => Volatile.Write(ref _ingress, value);
+    }
+
+    /// <summary>
     /// Publishes exactly one instance of a session-scoped member. The fast path is a volatile read;
     /// the slow path re-checks under the gate and returns the field rather than a caller's own
     /// temporary, so every caller ends up with the same instance. <c>??=</c> cannot be used here
@@ -100,7 +118,12 @@ internal sealed class LanguageServer(
     /// workspace folders and fallback root from initialize are fixed for the
     /// session, so the store is built once on first use.
     /// </summary>
-    internal DocumentStore Store => GetOrCreate(ref _store, CreateStore);
+    internal DocumentStore Store => GetOrCreate(ref _store, () =>
+    {
+        DocumentStore store = CreateStore();
+        store.InputBarrier = Ingress?.Inputs;
+        return store;
+    });
 
     /// <summary>
     /// Text document synchronization (didOpen/didChange/didClose) handler. A project change is
@@ -117,7 +140,8 @@ internal sealed class LanguageServer(
             {
                 Refresh.RequestRefresh();
                 EditorIntelligenceRefresh.RequestRefresh();
-            }));
+            },
+            () => Ingress?.Inputs));
 
     /// <summary>
     /// Session-scoped, bounded store of completion-resolve entries guarding opaque data tokens.
@@ -306,6 +330,8 @@ internal sealed class LanguageServer(
         logger.Warning($"[perf] editor intelligence: codeLensRefresh={_state.CodeLensRefreshSupported}, inlayHintRefresh={_state.InlayHintRefreshSupported}.");
         _diagnostics.SetRelatedInformationSupported(
             initializeParams.Capabilities?.TextDocument?.PublishDiagnostics?.RelatedInformation == true);
+        _diagnostics.SetVersionSupported(
+            initializeParams.Capabilities?.TextDocument?.PublishDiagnostics?.VersionSupport == true);
         logger.Info("Client initialized.");
 
         return new InitializeResponse(

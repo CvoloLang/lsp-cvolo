@@ -39,6 +39,8 @@ internal sealed class TypeHierarchySubtypesHandler(ILspLogger logger, Func<Docum
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[typeHierarchy/subtypes] '{documentUri}' is not open; no result.");

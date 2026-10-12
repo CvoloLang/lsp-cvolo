@@ -42,6 +42,8 @@ internal sealed class CodeLensHandler(
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[codeLens] '{documentUri}' is not open; no lenses.");

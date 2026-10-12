@@ -46,6 +46,8 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[hover] '{documentUri}' is not open; no hover.");

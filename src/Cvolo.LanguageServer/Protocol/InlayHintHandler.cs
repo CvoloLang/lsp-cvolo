@@ -46,6 +46,8 @@ internal sealed class InlayHintHandler(
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[inlayHint] '{documentUri}' is not open; no hints.");

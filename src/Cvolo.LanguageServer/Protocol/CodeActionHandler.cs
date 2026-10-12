@@ -35,6 +35,8 @@ internal sealed class CodeActionHandler(
         if (parameters?.TextDocument is not { } textDocument || parameters.Range is not { } requestRange)
             return null;
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!TextDocumentSyncHandler.TryCreateDocumentUri(textDocument.Uri, out DocumentUri documentUri)
             || !TextDocumentSyncHandler.IsCvoloDocument(documentUri)
             || !Store.TryCaptureSemanticEdit(documentUri, out SemanticEditRequestContext editContext))

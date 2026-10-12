@@ -82,9 +82,62 @@ public class DiagnosticPublicationTests : IDisposable
         Assert.Equal(0, DiagnosticFrames.ForUri(_session.Server, MainUri).Last().Count);
     }
 
+    [Fact]
+    public async Task DidOpen_WithoutVersionSupport_OmitsVersion()
+    {
+        await InitializeAsync();
+        await _session.Client.NotifyDidOpenAsync(MainUri, "cvolo", 1, InvalidText).WithTimeout("didOpen");
+        await WaitForAsync(published => published.Count > 0, "diagnostics published");
+
+        Assert.Null(DiagnosticFrames.ForUri(_session.Server, MainUri).Last().Version);
+    }
+
+    [Fact]
+    public async Task DidOpen_WithVersionSupport_IncludesDocumentVersion()
+    {
+        await InitializeWithVersionSupportAsync();
+        await _session.Client.NotifyDidOpenAsync(MainUri, "cvolo", 1, InvalidText).WithTimeout("didOpen");
+        await WaitForAsync(published => published.Count > 0, "diagnostics published");
+
+        Assert.Equal(1, DiagnosticFrames.ForUri(_session.Server, MainUri).Last().Version);
+    }
+
+    [Fact]
+    public async Task DidChange_WithVersionSupport_PublishesRefreshedVersion()
+    {
+        await InitializeWithVersionSupportAsync();
+        await _session.Client.NotifyDidOpenAsync(MainUri, "cvolo", 1, InvalidText).WithTimeout("didOpen");
+        await WaitForAsync(published => published.Count > 0, "diagnostics published");
+
+        await _session.Client.NotifyDidChangeAsync(MainUri, 2, new TextDocumentContentChangeEvent { Text = ValidText }).WithTimeout("didChange");
+        await WaitForAsync(published => published.Count >= 2 && published.Last().Count == 0, "empty refresh published");
+
+        Assert.Equal(2, DiagnosticFrames.ForUri(_session.Server, MainUri).Last().Version);
+    }
+
     private Task InitializeAsync()
     {
         return _session.Client.InitializeAsync(processId: null, rootPath: _workspace.DirectoryPath).WithTimeout("initialize");
+    }
+
+    private Task InitializeWithVersionSupportAsync()
+    {
+        var payload = new global::Cvolo.LanguageServer.Protocol.InitializeRequestParams
+        {
+            RootUri = new Uri(_workspace.DirectoryPath),
+            Capabilities = new global::Cvolo.LanguageServer.Protocol.ClientCapabilitiesPayload
+            {
+                TextDocument = new global::Cvolo.LanguageServer.Protocol.TextDocumentClientCapabilitiesPayload
+                {
+                    PublishDiagnostics = new global::Cvolo.LanguageServer.Protocol.PublishDiagnosticsClientCapabilitiesPayload
+                    {
+                        VersionSupport = true,
+                    },
+                },
+            },
+        };
+
+        return _session.Client.InitializeWithAsync(payload).WithTimeout("initialize");
     }
 
     private Task WaitForAsync(Func<IReadOnlyList<PublishedDiagnostics>, bool> condition, string label)

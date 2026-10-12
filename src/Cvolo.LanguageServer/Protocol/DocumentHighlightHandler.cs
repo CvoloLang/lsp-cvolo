@@ -38,6 +38,8 @@ internal sealed class DocumentHighlightHandler(ILspLogger logger, Func<DocumentS
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        await RequestBarrier.WaitAsync(Store, cancellationToken);
+
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[documentHighlight] '{documentUri}' is not open; no highlights.");
