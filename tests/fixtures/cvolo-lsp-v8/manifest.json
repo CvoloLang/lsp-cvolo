@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "fixtureSet": "cvolo-lsp-v8",
+  "description": "Deterministic fixtures for the INC 'Incremental Semantic Snapshots' P1 pipeline (capture/build, generation fencing, readiness).",
+  "projects": [
+    {
+      "name": "TwoFiles",
+      "path": "projects/TwoFiles",
+      "projectFile": "TwoFiles.cvlproj",
+      "files": [
+        {
+          "path": "TwoFiles.cvlproj",
+          "sha256": "4f837988f39c7d83f14632ee31b4aa56886f1c4b8375ce43ec1a1e1415a72647"
+        },
+        {
+          "path": "A.cvl",
+          "sha256": "e5754d16617a840f6fd1510a18bbed2f409e637b5f74eda9ba3ec5a2a0d8b681"
+        },
+        {
+          "path": "B.cvl",
+          "sha256": "45f7720e25e2a9aa2ea74fb1662c1c3bc4826b5a89f5731454c899fb461c4594"
+        }
+      ],
+      "scenario": {
+        "purpose": "Adding a `using` that names the namespace declared in B.cvl changes the import set, forcing the backend to rebuild the closure from captured inputs (S2/S3) rather than reading live disk during publication.",
+        "initialDocuments": [
+          { "path": "A.cvl", "version": 1, "opened": true },
+          { "path": "B.cvl", "version": 1, "opened": true }
+        ],
+        "eventSchedule": [
+          { "method": "textDocument/didOpen", "document": "A.cvl", "version": 1 },
+          { "method": "textDocument/didOpen", "document": "B.cvl", "version": 1 },
+          {
+            "method": "textDocument/didChange",
+            "document": "A.cvl",
+            "version": 2,
+            "change": { "kind": "full", "text": "using Widgets;\r\n\r\nint main()\r\n{\r\n    Foo();\r\n    return 0;\r\n}\r\n" }
+          }
+        ],
+        "requests": [
+          {
+            "method": "textDocument/definition",
+            "document": "A.cvl",
+            "onIdentifier": "Foo",
+            "expected": "at least one location whose uri refers to B.cvl"
+          }
+        ],
+        "failureInjectionPoints": ["didOpen", "didChange", "beforeCaptureCommit", "beforeBuild"],
+        "notes": "Assertions use bounded polling of real responses; no wall-clock sleeps are used as synchronization for correctness."
+      }
+    }
+  ]
+}

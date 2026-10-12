@@ -1,0 +1,6 @@
+namespace Widgets
+{
+    public void Foo()
+    {
+    }
+}

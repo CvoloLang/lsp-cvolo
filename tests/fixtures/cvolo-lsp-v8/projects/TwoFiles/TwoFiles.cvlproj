@@ -1,0 +1,6 @@
+<Project Sdk="Cvolo.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>TwoFiles</AssemblyName>
+  </PropertyGroup>
+</Project>
