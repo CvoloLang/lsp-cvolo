@@ -252,6 +252,17 @@ internal sealed partial class CvoloLanguageBackend(
             overrides[document.FilePath] = document.Text.ToString();
         overrides[filePath] = text;
 
+        // STAGE S1/S2 (Incremental Semantic Snapshots): capture the semantic input
+        // universe through a recording reader and rebuild a generation-owned snapshot
+        // from the captured bytes. The rebuild performs zero disk I/O and produces a
+        // fresh syntax/context tree, so an imported-file change never aliases the
+        // previous generation's analysis.
+        if (TryAdvanceImportClosureFromCapture(session, overrides, out ProjectSnapshot? capturedNext))
+        {
+            LogTiming("AdvanceImportClosure(capture)", stopwatch, $"file='{filePath}', overrides={overrides.Count}, documents={capturedNext!.Documents.Count}, generation={session.Generation}", 100);
+            return capturedNext;
+        }
+
         try
         {
             CvoloProject advanced = session.Project.Advance(overrides);
@@ -266,6 +277,38 @@ internal sealed partial class CvoloLanguageBackend(
             ProjectSnapshot fallback = session.Current.WithDocument(documentId, SourceText.From(text));
             session.Advance(fallback);
             return fallback;
+        }
+    }
+
+    private bool TryAdvanceImportClosureFromCapture(
+        CvoloProjectSession session,
+        IReadOnlyDictionary<string, string> overrides,
+        out ProjectSnapshot? next)
+    {
+        next = null;
+        try
+        {
+            var reader = new RecordingCompilerInputReader(FileSystemCompilerInputReader.Instance);
+            var request = new ToolingCaptureRequest(session.Project.ProjectPath, overrides, _libraryPaths);
+            CaptureResult capture = session.Workspace.CaptureUniverseV1(request, reader);
+            if (capture is not CaptureResult.Captured captured)
+                return false;
+
+            BuildResult build = session.Workspace.BuildSnapshotFromCaptureV1(captured.Capture, session.Project);
+            if (build is not BuildResult.Ready ready)
+                return false;
+
+            session.SetProject(ready.Project);
+            session.Advance(ready.Snapshot);
+            next = ready.Snapshot;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // Capture/build is an optimization over the in-process advance; any failure
+            // falls back to the legacy path rather than dropping the edit.
+            _logger.Write(CoreLogLevel.Debug, $"Capture-based import closure refresh unavailable: {ex.Message}");
+            return false;
         }
     }
 
