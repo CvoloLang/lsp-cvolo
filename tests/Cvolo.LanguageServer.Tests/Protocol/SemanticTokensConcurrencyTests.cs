@@ -126,7 +126,11 @@ public class SemanticTokensConcurrencyTests : IDisposable
         await _session.Client.WaitUntilAsync(() => _store.TryGet(coreUri, out var state) && state.Version.Value == 2, "a.cvl v2");
         _backend.ReleaseNavigation();
 
-        Assert.Null(await inFlight.WithTimeout("stale semantic tokens"));
+        // A typed server error carrying CvoloErrorData surfaces on the client as the base
+        // RemoteInvocationException (data-bearing errors are not the type-less RemoteRpcException).
+        RemoteInvocationException error = await Assert.ThrowsAsync<RemoteInvocationException>(
+            () => inFlight.WithTimeout("stale semantic tokens"));
+        Assert.Equal(-32803, (int?)error.ErrorCode);
     }
 
     [Fact]
@@ -165,7 +169,9 @@ public class SemanticTokensConcurrencyTests : IDisposable
         await OpenAsync("a.cvl", 1, "int main() { return 0; }\n");
 
         _backend.ThrowOnNavigation = true;
-        Assert.Null(await _session.Client.SemanticTokensAsync(Uri("a.cvl")).WithTimeout("failing semantic tokens"));
+        RemoteInvocationException error = await Assert.ThrowsAsync<RemoteInvocationException>(
+            () => _session.Client.SemanticTokensAsync(Uri("a.cvl")).WithTimeout("failing semantic tokens"));
+        Assert.Equal(-32803, (int?)error.ErrorCode);
 
         _backend.ThrowOnNavigation = false;
         _backend.CannedSemanticTokens = new BackendSemanticTokenResult([Token(4, 4)]);

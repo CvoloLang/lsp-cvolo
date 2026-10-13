@@ -56,8 +56,14 @@ internal sealed class SemanticTokensHandler(
 
         if (context.Document.Text.Length > SemanticTokensMaxInteractiveTextLength)
         {
-            logger.Warning($"[perf] semanticTokens skipped for large document: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={SemanticTokensMaxInteractiveTextLength}");
-            return new SemanticTokensResponse([]);
+            // An oversized document is a resource denial, not proof that a nonempty document has
+            // zero semantic tokens: return a typed non-success, never a successful empty array.
+            logger.Warning($"[perf] semanticTokens refused for large document: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={SemanticTokensMaxInteractiveTextLength}");
+            throw TypedError(
+                "Semantic tokens are unavailable for this document because it exceeds the interactive resource budget.",
+                CvoloErrorData.BackendUnavailable,
+                retryable: true,
+                reason: CvoloErrorData.ResourceLimit);
         }
 
         BackendSemanticTokenResult? result;
@@ -72,24 +78,28 @@ internal sealed class SemanticTokensHandler(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[semanticTokens] backend failure for '{documentUri}': {ex.Message}");
-            return null;
+            // Never publish the exception text: it may embed source. The type is enough to trace.
+            logger.Warning($"[semanticTokens] backend failure for '{documentUri}': {ex.GetType().Name}");
+            throw TypedError(
+                "The compiler backend failed while computing semantic tokens.",
+                CvoloErrorData.BackendUnavailable,
+                retryable: true,
+                reason: CvoloErrorData.BackendFailure);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
 
         if (result is null)
         {
-            logger.Debug($"[semanticTokens] skipped stale request for '{documentUri}'.");
-            return null;
+            logger.Debug($"[semanticTokens] superseded request for '{documentUri}'; no tokens.");
+            throw TypedError(
+                "The semantic token request was superseded by newer document input.",
+                CvoloErrorData.SupersededByQueuedInput,
+                retryable: true);
         }
 
-        int[]? data = Encode(result, context.Document.Text, tokenTypesAccessor(), tokenModifiersAccessor());
+        int[] data = Encode(result, context.Document.Text, tokenTypesAccessor(), tokenModifiersAccessor());
         LogTiming("encode", stopwatch, documentUri);
-        if (data is null)
-        {
-            return null;
-        }
 
         // Encoding can be non-trivial for large documents. Perform the final freshness
         // gate after normalization/encoding so no result from an old project generation
@@ -97,8 +107,11 @@ internal sealed class SemanticTokensHandler(
         cancellationToken.ThrowIfCancellationRequested();
         if (!Store.IsCurrent(context))
         {
-            logger.Debug($"[semanticTokens] discarded stale result for '{documentUri}'.");
-            return null;
+            logger.Debug($"[semanticTokens] result no longer current for '{documentUri}'; discarded.");
+            throw TypedError(
+                "The semantic token result is no longer valid for the current document.",
+                CvoloErrorData.SupersededByQueuedInput,
+                retryable: true);
         }
 
         logger.Info($"[semanticTokens] {documentUri}: {data.Length / 5} token(s).");
@@ -145,7 +158,14 @@ internal sealed class SemanticTokensHandler(
             logger.Debug($"[perf] semanticTokens {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
     }
 
-    private int[]? Encode(BackendSemanticTokenResult result, string text, string[] tokenTypes, string[] tokenModifiers)
+    private static LocalRpcException TypedError(string message, string cvoloKind, bool retryable, string? reason = null)
+        => new(message)
+        {
+            ErrorCode = ProtocolErrorCodes.RequestFailed,
+            ErrorData = new CvoloErrorData(cvoloKind, retryable, reason: reason),
+        };
+
+    private int[] Encode(BackendSemanticTokenResult result, string text, string[] tokenTypes, string[] tokenModifiers)
     {
         var index = new LineIndex(text);
         var accepted = new List<(int Line, int Character, int Length, int Type, int Modifiers)>();
