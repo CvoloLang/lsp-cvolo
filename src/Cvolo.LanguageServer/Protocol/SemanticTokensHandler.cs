@@ -76,7 +76,9 @@ internal sealed class SemanticTokensHandler(
                 cancellationToken).ConfigureAwait(false);
             LogTiming("backend", stopwatch, documentUri);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // A typed ContentModified (or any other LocalRpcException) already carries the protocol
+        // error the client must see; never re-wrap it as a backend RequestFailed.
+        catch (Exception ex) when (ex is not OperationCanceledException and not LocalRpcException)
         {
             // Never publish the exception text: it may embed source. The type is enough to trace.
             logger.Warning($"[semanticTokens] backend failure for '{documentUri}': {ex.GetType().Name}");
@@ -92,10 +94,8 @@ internal sealed class SemanticTokensHandler(
         if (result is null)
         {
             logger.Debug($"[semanticTokens] superseded request for '{documentUri}'; no tokens.");
-            throw TypedError(
-                "The semantic token request was superseded by newer document input.",
-                CvoloErrorData.SupersededByQueuedInput,
-                retryable: true);
+            throw ContentModified(
+                "The semantic token request was superseded by newer document input.");
         }
 
         int[] data = Encode(result, context.Document.Text, tokenTypesAccessor(), tokenModifiersAccessor());
@@ -108,10 +108,8 @@ internal sealed class SemanticTokensHandler(
         if (!Store.IsCurrent(context))
         {
             logger.Debug($"[semanticTokens] result no longer current for '{documentUri}'; discarded.");
-            throw TypedError(
-                "The semantic token result is no longer valid for the current document.",
-                CvoloErrorData.SupersededByQueuedInput,
-                retryable: true);
+            throw ContentModified(
+                "The semantic token result is no longer valid for the current document.");
         }
 
         logger.Info($"[semanticTokens] {documentUri}: {data.Length / 5} token(s).");
@@ -163,6 +161,20 @@ internal sealed class SemanticTokensHandler(
         {
             ErrorCode = ProtocolErrorCodes.RequestFailed,
             ErrorData = new CvoloErrorData(cvoloKind, retryable, reason: reason),
+        };
+
+    /// <summary>
+    /// A stale document or project generation is not a backend failure: the client's own edit
+    /// invalidated the answer mid-flight. LSP reserves <see cref="ProtocolErrorCodes.ContentModified"/>
+    /// for exactly this, and language clients treat it (and RequestCancelled) as silent — no error
+    /// notification. Reporting it as RequestFailed made ordinary typing surface a user-visible
+    /// "Request … failed" message. The freshness checks are unchanged; only the error class differs.
+    /// </summary>
+    private static LocalRpcException ContentModified(string message)
+        => new(message)
+        {
+            ErrorCode = ProtocolErrorCodes.ContentModified,
+            ErrorData = new CvoloErrorData(CvoloErrorData.SupersededByQueuedInput, retryable: true),
         };
 
     private int[] Encode(BackendSemanticTokenResult result, string text, string[] tokenTypes, string[] tokenModifiers)

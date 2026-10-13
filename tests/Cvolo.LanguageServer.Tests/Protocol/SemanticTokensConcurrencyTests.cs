@@ -93,11 +93,11 @@ public class SemanticTokensConcurrencyTests : IDisposable
     /// JSON-RPC code and the <c>error.data</c> fields (<c>cvoloKind</c>, <c>retryable</c>,
     /// <c>reason</c>), not the in-process exception.
     /// </summary>
-    private void AssertTypedWireError(string expectedKind, string? expectedReason)
+    private void AssertTypedWireError(string expectedKind, string? expectedReason, int expectedCode = ProtocolErrorCodes.RequestFailed)
     {
         JObject? error = _session.Server.LastJsonRpcError();
         Assert.NotNull(error);
-        Assert.Equal(-32803, (int?)error!["code"]);
+        Assert.Equal(expectedCode, (int?)error!["code"]);
 
         JObject data = Assert.IsType<JObject>(error["data"]);
         Assert.Equal(expectedKind, (string?)data["cvoloKind"]);
@@ -105,6 +105,14 @@ public class SemanticTokensConcurrencyTests : IDisposable
         Assert.Equal(expectedReason, (string?)data["reason"]);
         Assert.Null(data["retryAfterMs"]);
     }
+
+    /// <summary>Every serialized error frame the server wrote since the last reset.</summary>
+    private List<JObject> ServerErrors()
+        => _session.Server.GetServerFrames()
+            .Select(frame => JObject.Parse(frame))
+            .Where(frame => frame["error"] is JObject)
+            .Select(frame => (JObject)frame["error"]!)
+            .ToList();
 
     [Fact]
     public async Task MalformedAndOverlappingTokens_AreRejectedWithoutCorruptingTheResponse()
@@ -148,8 +156,8 @@ public class SemanticTokensConcurrencyTests : IDisposable
         // RemoteInvocationException (data-bearing errors are not the type-less RemoteRpcException).
         RemoteInvocationException error = await Assert.ThrowsAsync<RemoteInvocationException>(
             () => inFlight.WithTimeout("stale semantic tokens"));
-        Assert.Equal(-32803, (int?)error.ErrorCode);
-        AssertTypedWireError(CvoloErrorData.SupersededByQueuedInput, expectedReason: null);
+        Assert.Equal(ProtocolErrorCodes.ContentModified, (int?)error.ErrorCode);
+        AssertTypedWireError(CvoloErrorData.SupersededByQueuedInput, expectedReason: null, expectedCode: ProtocolErrorCodes.ContentModified);
     }
 
     [Fact]
@@ -232,5 +240,107 @@ public class SemanticTokensConcurrencyTests : IDisposable
         Assert.DoesNotContain(
             _session.Server.GetServerFrames(),
             frame => frame.Contains("workspace/semanticTokens/refresh", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Rapid typing invalidates in-flight semantic-token requests. Every stale answer must be a
+    /// silent ContentModified (-32801) on the wire — never a user-visible RequestFailed (-32803) —
+    /// and a request on the latest document version must still be served.
+    /// </summary>
+    [Fact]
+    public async Task RapidTyping_StaleRequestsAreContentModified_AndTheLatestVersionRecovers()
+    {
+        await StartAsync();
+        await OpenAsync("a.cvl", 1, "int main() { return 0; }\n");
+        _backend.CannedSemanticTokens = new BackendSemanticTokenResult([Token(4, 4)]);
+        var coreUri = DocumentUri.Create(_workspace.PathOf("a.cvl"));
+
+        _session.Server.ResetServerFrames();
+        _backend.ArmNavigation();
+        Task<JObject?>[] inFlight =
+        [
+            _session.Client.SemanticTokensAsync(Uri("a.cvl")),
+            _session.Client.SemanticTokensAsync(Uri("a.cvl")),
+            _session.Client.SemanticTokensAsync(Uri("a.cvl")),
+        ];
+        Assert.True(_backend.WaitUntilNavigationEntered(TimeSpan.FromSeconds(5)), "backend semantic tokens should be entered");
+
+        // The user keeps typing while every request is still in flight.
+        for (var version = 2; version <= 4; version++)
+        {
+            await _session.Client.NotifyDidChangeAsync(
+                Uri("a.cvl"),
+                version,
+                new TextDocumentContentChangeEvent { Text = $"int main() {{ return {version}; }}\n" });
+        }
+
+        await _session.Client.WaitUntilAsync(() => _store.TryGet(coreUri, out var state) && state.Version.Value == 4, "a.cvl v4");
+        _backend.ReleaseNavigation();
+
+        foreach (Task<JObject?> request in inFlight)
+        {
+            RemoteInvocationException stale = await Assert.ThrowsAsync<RemoteInvocationException>(
+                () => request.WithTimeout("stale semantic tokens"));
+            Assert.Equal(ProtocolErrorCodes.ContentModified, (int?)stale.ErrorCode);
+        }
+
+        // Not one stale answer may surface as a user-visible failure.
+        List<JObject> errors = ServerErrors();
+        Assert.NotEmpty(errors);
+        Assert.All(errors, error => Assert.Equal(ProtocolErrorCodes.ContentModified, (int?)error["code"]));
+        Assert.DoesNotContain(
+            _session.Server.GetServerFrames(),
+            frame => frame.Contains("-32803", StringComparison.Ordinal));
+
+        // A request on the latest version is served normally.
+        _session.Server.ResetServerFrames();
+        JObject? latest = await _session.Client.SemanticTokensAsync(Uri("a.cvl")).WithTimeout("latest semantic tokens");
+        Assert.NotNull(latest);
+        Assert.Equal(5, latest!["data"]!.Values<int>().Count());
+        Assert.Empty(ServerErrors());
+    }
+
+    /// <summary>
+    /// A cancelled request must not be reported as a RequestFailed: LSP cancellation is silent, and
+    /// the next request must still succeed.
+    /// </summary>
+    [Fact]
+    public async Task CancelledRequest_IsNeverReportedAsRequestFailed()
+    {
+        await StartAsync();
+        await OpenAsync("a.cvl", 1, "int main() { return 0; }\n");
+        _backend.CannedSemanticTokens = new BackendSemanticTokenResult([Token(4, 4)]);
+
+        _session.Server.ResetServerFrames();
+        _backend.ArmNavigation();
+        using var cts = new CancellationTokenSource();
+        Task<JObject?> inFlight = _session.Client.SemanticTokensWithTokenAsync(Uri("a.cvl"), cts.Token);
+        Assert.True(_backend.WaitUntilNavigationEntered(TimeSpan.FromSeconds(5)), "backend semantic tokens should be entered");
+
+        cts.Cancel();
+        await _session.Client.WaitUntilAsync(_session.Client.HasSentCancelRequest, "cancel request sent");
+        await Task.Delay(150);
+        _backend.ReleaseNavigation();
+
+        try
+        {
+            await inFlight.WithTimeout("cancelled semantic tokens");
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or RemoteRpcException)
+        {
+        }
+
+        Assert.True(_session.Client.HasSentCancelRequest(), "the client should have sent $/cancelRequest");
+        // A cancelled request must never be reported as a user-visible RequestFailed.
+        Assert.DoesNotContain(
+            _session.Server.GetServerFrames(),
+            frame => frame.Contains("-32803", StringComparison.Ordinal));
+        // If the server answered at all, it must use an LSP cancellation code.
+        foreach (JObject error in ServerErrors())
+        {
+            Assert.Contains((int?)error["code"], new int?[] { ProtocolErrorCodes.RequestCancelled, ProtocolErrorCodes.ServerCancelled });
+        }
+
+        Assert.NotNull(await _session.Client.SemanticTokensAsync(Uri("a.cvl")).WithTimeout("next semantic tokens"));
     }
 }
