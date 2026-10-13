@@ -284,59 +284,58 @@ public sealed class OrderedInputQueue : IInputBarrier
             _applying = true;
         }
 
-        try
+        while (true)
         {
-            while (true)
-            {
-                Func<InputDisposition>? apply;
-                long sequence;
-                lock (_gate)
-                {
-                    if (_completed || _entries.Count == 0)
-                    {
-                        break;
-                    }
-
-                    KeyValuePair<long, Entry> head = _entries.First();
-                    if (!head.Value.Attached)
-                    {
-                        break;
-                    }
-
-                    sequence = head.Key;
-                    apply = head.Value.Apply;
-                    head.Value.Apply = null;
-                    head.Value.Attached = false;
-                }
-
-                InputDisposition disposition;
-                try
-                {
-                    disposition = apply?.Invoke() ?? InputDisposition.Rejected;
-                }
-                catch (Exception)
-                {
-                    disposition = InputDisposition.Rejected;
-                }
-
-                lock (_gate)
-                {
-                    if (_entries.TryGetValue(sequence, out Entry? entry) && !entry.Settled)
-                    {
-                        entry.Settled = true;
-                        _entries.Remove(sequence);
-                        Count(disposition);
-                        _lastSettled = Math.Max(_lastSettled, sequence);
-                        ReleaseSatisfiedWaiters();
-                    }
-                }
-            }
-        }
-        finally
-        {
+            Func<InputDisposition>? apply;
+            long sequence;
             lock (_gate)
             {
-                _applying = false;
+                if (_completed || _entries.Count == 0)
+                {
+                    // Clear the applier flag while still holding the gate. An
+                    // Attach blocked on the gate either observes the empty queue
+                    // and starts its own applier, or has already installed the
+                    // entry this check would have seen. Clearing the flag outside
+                    // the gate (after the gate is released) loses that wakeup and
+                    // strands an attached entry forever, so every later read
+                    // request's barrier waits on it until it times out.
+                    _applying = false;
+                    return;
+                }
+
+                KeyValuePair<long, Entry> head = _entries.First();
+                if (!head.Value.Attached)
+                {
+                    _applying = false;
+                    return;
+                }
+
+                sequence = head.Key;
+                apply = head.Value.Apply;
+                head.Value.Apply = null;
+                head.Value.Attached = false;
+            }
+
+            InputDisposition disposition;
+            try
+            {
+                disposition = apply?.Invoke() ?? InputDisposition.Rejected;
+            }
+            catch (Exception)
+            {
+                disposition = InputDisposition.Rejected;
+            }
+
+            lock (_gate)
+            {
+                if (_entries.TryGetValue(sequence, out Entry? entry) && !entry.Settled)
+                {
+                    entry.Settled = true;
+                    _entries.Remove(sequence);
+                    Count(disposition);
+                    _lastSettled = Math.Max(_lastSettled, sequence);
+                    ReleaseSatisfiedWaiters();
+                }
             }
         }
     }

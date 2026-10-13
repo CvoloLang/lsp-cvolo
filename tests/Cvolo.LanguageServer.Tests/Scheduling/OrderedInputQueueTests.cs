@@ -123,4 +123,46 @@ public sealed class OrderedInputQueueTests
         Assert.Equal(2, metrics.MaxQueued);
         Assert.Equal(Seq(2), queue.SettledThrough);
     }
+
+    /// <summary>
+    /// Regression for the lost-wakeup race in <c>ApplyAttachedHead</c>: a burst of concurrent
+    /// <c>Attach</c> calls must all be applied, leaving nothing queued, so that a later read
+    /// barrier is satisfied immediately instead of timing out. Before the fix, an <c>Attach</c>
+    /// that slipped into the window where the applier had released the gate (having observed an
+    /// empty queue) but had not yet cleared <c>_applying</c> was stranded forever, and every
+    /// subsequent request timed out with <c>InputBarrierTimeout</c>.
+    /// </summary>
+    [Fact]
+    public async Task ConcurrentAttach_NeverStrandsAnEntry_AndLaterBarrierSatisfies()
+    {
+        const int count = 24;
+
+        for (int iteration = 0; iteration < 250; iteration++)
+        {
+            var queue = new OrderedInputQueue();
+            var applied = new System.Collections.Concurrent.ConcurrentDictionary<long, byte>();
+
+            using var start = new ManualResetEventSlim(false);
+            Task[] tasks = Enumerable.Range(1, count)
+                .Select(value => Task.Run(() =>
+                {
+                    start.Wait();
+                    queue.Attach(Seq(value), () =>
+                    {
+                        applied[value] = 1;
+                        return InputDisposition.Applied;
+                    });
+                }))
+                .ToArray();
+
+            start.Set();
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+
+            Assert.Equal(count, applied.Count);
+            Assert.Equal(0, queue.Metrics.Queued);
+            Assert.Equal(
+                BarrierOutcome.Satisfied,
+                await queue.WaitForInputsBeforeAsync(Seq(count), TimeSpan.FromMilliseconds(250)).ConfigureAwait(false));
+        }
+    }
 }
