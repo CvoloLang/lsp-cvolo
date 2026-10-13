@@ -54,6 +54,12 @@ internal sealed record ServerCapabilities
     public bool? FoldingRangeProvider { get; init; }
 
     public bool? SelectionRangeProvider { get; init; }
+
+    /// <summary>LSP <c>executeCommandProvider</c>: the workspace command names the server accepts.</summary>
+    public ExecuteCommandOptions? ExecuteCommandProvider { get; init; }
+
+    /// <summary>LSP <c>experimental</c> capability bag advertised during initialization.</summary>
+    public object? Experimental { get; init; }
 }
 
 /// <summary>
@@ -202,6 +208,12 @@ internal sealed class ClientCapabilitiesPayload
     public TextDocumentClientCapabilitiesPayload? TextDocument { get; init; }
 
     public WorkspaceClientCapabilitiesPayload? Workspace { get; init; }
+
+    /// <summary>
+    /// The open <c>experimental</c> capability bag. It is read raw because its shape is negotiated
+    /// out of band: the server only looks for the keys it defined (§21).
+    /// </summary>
+    public Newtonsoft.Json.Linq.JObject? Experimental { get; init; }
 }
 
 internal sealed class WorkspaceClientCapabilitiesPayload
@@ -471,6 +483,57 @@ internal sealed class CodeLensParamsPayload
 {
     public TextDocumentIdentifier? TextDocument { get; init; }
 }
+
+/// <summary>
+/// Server-side shape of the <c>workspace/executeCommand</c> params. The command is an open string and
+/// the arguments are carried raw: the server decides what a named command means and never infers a
+/// command from an argument shape (§4, §39).
+/// </summary>
+internal sealed class ExecuteCommandParamsPayload
+{
+    public string? Command { get; init; }
+
+    public Newtonsoft.Json.Linq.JArray? Arguments { get; init; }
+}
+
+/// <summary>LSP <c>executeCommandProvider</c> options: the command names the server advertises.</summary>
+internal sealed record ExecuteCommandOptions(string[] Commands);
+
+/// <summary>
+/// The v3 anchored CodeLens handshake the server advertises under
+/// <c>experimental.cvoloAnchoredLens</c>. The version pins the payload shape and <c>validateAction</c>
+/// states that the client performs the two-step resolve/validate exchange before it acts (§21, §39).
+/// </summary>
+internal sealed record AnchoredLensCapability(int Version, bool ValidateAction);
+
+/// <summary>
+/// A clickable anchored lens. It names the opaque, session-bound lens token the server minted and the
+/// document URI the client understands; it carries no position, because a position is a claim the
+/// client could not verify (§21, §39.1).
+/// </summary>
+internal sealed record AnchoredLensRequestV3(int SchemaVersion, string LensToken, string WireUri);
+
+/// <summary>The client's request to validate an anchored action before it performs it.</summary>
+internal sealed record AnchoredActionValidationV3(string ActionToken);
+
+/// <summary>
+/// The discriminated result of resolving an anchored lens. <c>kind</c> is one of
+/// <c>ShowReferences</c>, <c>ShowLayout</c> or <c>Unavailable</c>. The fields a kind needs are present
+/// only for that kind, and <c>reason</c> explains an <c>Unavailable</c> without leaking source or
+/// exception text (§21, §39).
+/// </summary>
+internal sealed record AnchoredActionResultV3(
+    int SchemaVersion,
+    string Kind,
+    string? ActionToken = null,
+    string? WireUri = null,
+    Position? Anchor = null,
+    Location[]? Locations = null,
+    TypeLayoutResponse? Layout = null,
+    string? Reason = null);
+
+/// <summary>The answer to a validate request: whether the action is still valid, with a reason if not.</summary>
+internal sealed record AnchoredValidationResultV3(bool Valid, string? Reason = null);
 
 /// <summary>
 /// Server-side shape of <c>textDocument/documentHighlight</c> params. A work-done or partial-result

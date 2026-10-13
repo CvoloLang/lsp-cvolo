@@ -18,8 +18,12 @@ namespace Cvolo.LanguageServer.Protocol;
 internal sealed class CodeLensHandler(
     ILspLogger logger,
     Func<DocumentStore> storeAccessor,
-    Func<EditorIntelligenceSettings> settingsAccessor)
+    Func<EditorIntelligenceSettings> settingsAccessor,
+    AnchoredActionRegistry anchoredActions,
+    Func<bool> anchoredLensSupported)
 {
+    private const string AnchoredLensCommand = "cvolo.executeAnchoredLens";
+
     private DocumentStore? _store;
 
     private DocumentStore Store => _store ??= storeAccessor();
@@ -96,9 +100,10 @@ internal sealed class CodeLensHandler(
         ordered.Sort(CompareLenses);
 
         var mapped = new List<CodeLens>(ordered.Count);
+        bool anchored = anchoredLensSupported();
         foreach (BackendCodeLensInfo lens in ordered)
         {
-            if (TryMapLens(lens, index, textLength, documentUriText, offsetFormat, out CodeLens codeLens))
+            if (TryMapLens(lens, index, textLength, documentUriText, offsetFormat, context, anchored, out CodeLens codeLens))
             {
                 mapped.Add(codeLens);
             }
@@ -115,6 +120,8 @@ internal sealed class CodeLensHandler(
         int textLength,
         string documentUriText,
         BackendOffsetFormat offsetFormat,
+        SemanticRequestContext context,
+        bool anchored,
         out CodeLens codeLens)
     {
         if (!SpanMapper.TryMapRange(index, textLength, lens.Range, out LspRange range))
@@ -127,7 +134,7 @@ internal sealed class CodeLensHandler(
         codeLens = new CodeLens
         {
             Range = range,
-            Command = MapCommand(lens, PresentTitle(lens, offsetFormat), index, documentUriText),
+            Command = MapCommand(lens, PresentTitle(lens, offsetFormat), documentUriText, context, anchored),
         };
         return true;
     }
@@ -145,42 +152,40 @@ internal sealed class CodeLensHandler(
 
     /// <summary>
     /// Builds the command a client presents. Its title is always the text the reader sees, because the
-    /// title is the only place a CodeLens can carry one; its identifier is the backend's command name
-    /// when the lens is clickable, and empty when it is not (§11, §21, §39). A lens the compiler
-    /// described but gave no behaviour to — an import or export linkage fact, say — is still worth
-    /// showing, and an empty identifier is how the protocol says "text, no action". A lens that was
-    /// clickable but whose position no longer exists in the captured text falls back to the same
-    /// shape: a command that would open the wrong location is worse than a label that does nothing.
+    /// title is the only place a CodeLens can carry one. A clickable lens is presented only when the
+    /// client took part in the anchored-lens handshake: the command then carries an opaque,
+    /// session-bound token instead of a position, so the server — not the client — decides what the
+    /// click means and revalidates it against the current document (§21, §39). A lens the compiler
+    /// gave no behaviour to, or one shown to a client that did not opt in, is inert text: an empty
+    /// identifier is how the protocol says "text, no action". A command that opened a position the
+    /// server never revalidated would be worse than a label that does nothing.
     /// </summary>
-    private Command? MapCommand(BackendCodeLensInfo lens, string title, LineIndex index, string documentUriText)
+    private Command MapCommand(
+        BackendCodeLensInfo lens,
+        string title,
+        string documentUriText,
+        SemanticRequestContext context,
+        bool anchored)
     {
-        if (lens.Command is not { } command)
+        if (!anchored
+            || lens.Command is null
+            || lens.Kind is not (BackendCodeLensKind.References or BackendCodeLensKind.Layout))
         {
             return new Command { Title = title, CommandIdentifier = string.Empty, Arguments = [] };
         }
 
-        var arguments = new List<object>(command.Arguments.Count + 1) { documentUriText };
-        for (int i = 0; i < command.Arguments.Count; i++)
-        {
-            if (command.Arguments[i] is not BackendCodeLensPositionArgument position
-                || !index.TryGetPosition(position.Position, out TextPosition mapped))
-            {
-                logger.Debug($"[codeLens] presented the '{lens.Kind}' lens as text only: its position does not map to the captured text.");
-                return new Command { Title = title, CommandIdentifier = string.Empty, Arguments = [] };
-            }
-
-            arguments.Add(new
-            {
-                line = mapped.Line,
-                character = mapped.Character,
-            });
-        }
+        string token = anchoredActions.Mint(new AnchoredActionRecord(
+            context.Uri,
+            lens.Kind,
+            lens.Range.Start,
+            context,
+            IsAction: false));
 
         return new Command
         {
             Title = title,
-            CommandIdentifier = command.Name,
-            Arguments = [.. arguments],
+            CommandIdentifier = AnchoredLensCommand,
+            Arguments = [new AnchoredLensRequestV3(AnchoredLensHandler.SchemaVersion, token, documentUriText)],
         };
     }
 

@@ -74,6 +74,8 @@ internal sealed class LanguageServer(
     private ConfigurationHandler? _configuration;
     private EditorIntelligenceRefreshCoordinator? _editorRefresh;
     private SemanticTokensRefreshCoordinator? _refresh;
+    private AnchoredLensHandler? _anchoredLens;
+    private readonly AnchoredActionRegistry _anchoredActions = new();
     private Timer? _deadClientExitTimer;
 
     /// <summary>
@@ -206,6 +208,9 @@ internal sealed class LanguageServer(
     /// <summary>Session-scoped, bounded store of lazy code-action resolve entries.</summary>
     internal CodeActionResolveStore CodeActionResolveStore => GetOrCreate(ref _codeActionResolveStore, () => new CodeActionResolveStore());
 
+    /// <summary>Session-scoped, bounded store of opaque anchored-lens tokens.</summary>
+    internal AnchoredActionRegistry AnchoredActions => _anchoredActions;
+
     /// <summary>textDocument/codeAction and codeAction/resolve handler.</summary>
     internal CodeActionHandler CodeActions => GetOrCreate(
         ref _codeActions,
@@ -226,7 +231,14 @@ internal sealed class LanguageServer(
             logger));
 
     /// <summary>textDocument/codeLens handler.</summary>
-    internal CodeLensHandler CodeLenses => GetOrCreate(ref _codeLenses, () => new CodeLensHandler(logger, () => Store, () => _state.EditorIntelligence));
+    internal CodeLensHandler CodeLenses => GetOrCreate(
+        ref _codeLenses,
+        () => new CodeLensHandler(
+            logger,
+            () => Store,
+            () => _state.EditorIntelligence,
+            _anchoredActions,
+            () => _state.AnchoredLensSupported));
 
     /// <summary>textDocument/inlayHint handler.</summary>
     internal InlayHintHandler InlayHints => GetOrCreate(ref _inlayHints, () => new InlayHintHandler(logger, () => Store, () => _state.EditorIntelligence));
@@ -242,6 +254,14 @@ internal sealed class LanguageServer(
 
     /// <summary>The <c>cvolo/typeLayout</c> request behind the editor's read-only layout view.</summary>
     internal TypeLayoutHandler TypeLayout => GetOrCreate(ref _typeLayout, () => new TypeLayoutHandler(logger, () => Store));
+
+    /// <summary>
+    /// workspace/executeCommand for anchored CodeLens actions and the cvolo/validateAnchoredAction.v3
+    /// step that precedes performing one.
+    /// </summary>
+    internal AnchoredLensHandler AnchoredLens => GetOrCreate(
+        ref _anchoredLens,
+        () => new AnchoredLensHandler(logger, () => Store, _anchoredActions));
 
     /// <summary>workspace/didChangeConfiguration handler for the editor intelligence settings.</summary>
     internal ConfigurationHandler Configuration => GetOrCreate(
@@ -325,6 +345,7 @@ internal sealed class LanguageServer(
         logger.Info($"Semantic tokens: enabled={_state.SemanticTokensEnabled}, refresh={_state.RefreshSupported}, tokenTypes={_state.SemanticTokenTypes.Length}, tokenModifiers={_state.SemanticTokenModifiers.Length}.");
         logger.Warning($"[perf] semantic tokens legend: types=[{string.Join(",", _state.SemanticTokenTypes)}], modifiers=[{string.Join(",", _state.SemanticTokenModifiers)}].");
         logger.Warning($"[perf] editor intelligence: codeLensRefresh={_state.CodeLensRefreshSupported}, inlayHintRefresh={_state.InlayHintRefreshSupported}.");
+        logger.Info($"Anchored lenses: supported={_state.AnchoredLensSupported}.");
         _diagnostics.SetRelatedInformationSupported(
             initializeParams.Capabilities?.TextDocument?.PublishDiagnostics?.RelatedInformation == true);
         _diagnostics.SetVersionSupported(
@@ -383,6 +404,11 @@ internal sealed class LanguageServer(
                 DocumentHighlightProvider = true,
                 FoldingRangeProvider = true,
                 SelectionRangeProvider = true,
+                ExecuteCommandProvider = new ExecuteCommandOptions([AnchoredLensHandler.ResolveCommand]),
+                Experimental = new
+                {
+                    cvoloAnchoredLens = new AnchoredLensCapability(AnchoredLensHandler.SchemaVersion, ValidateAction: true),
+                },
             },
             new ServerInfo(ServerMetadata.ServerName, ServerMetadata.ServerVersion));
     }
@@ -395,6 +421,7 @@ internal sealed class LanguageServer(
         }
 
         _state.MarkShutdownReceived();
+        _anchoredActions.Clear();
         DisarmClientWatcher();
         logger.Info("Shutdown received; awaiting exit. Watcher disarmed.");
         return null;

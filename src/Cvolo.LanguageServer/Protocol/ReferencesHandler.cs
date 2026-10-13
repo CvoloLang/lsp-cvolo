@@ -64,7 +64,7 @@ internal sealed class ReferencesHandler(ILspLogger logger, Func<DocumentStore> s
         return mapped;
     }
 
-    private Location[] Map(BackendReferenceResult result)
+    internal static Location[] Map(BackendReferenceResult result)
     {
         var indexes = new Dictionary<DocumentUri, LineIndex>(DocumentUriPathComparer.Instance);
         var seen = new HashSet<(string Path, int Start, int Length)>(ReferenceKeyComparer.Instance);

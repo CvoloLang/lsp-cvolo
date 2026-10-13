@@ -155,8 +155,24 @@ public class EditorIntelligenceSemanticTests : IDisposable
 
     private async Task StartAsync()
     {
+        // Advertise the anchored-lens (CodeLens v3) capability so clickable lenses carry an opaque
+        // token the server can re-validate, rather than a positional command that could go stale.
         await _session.Client
-            .InitializeAsync(processId: null, rootPath: _workspace.DirectoryPath, hoverContentFormat: null, hierarchicalSymbols: false)
+            .InitializeWithAsync(new InitializeRequestParams
+            {
+                RootUri = new Uri(_workspace.DirectoryPath),
+                Capabilities = new ClientCapabilitiesPayload
+                {
+                    Experimental = new JObject
+                    {
+                        ["cvoloAnchoredLens"] = new JObject
+                        {
+                            ["version"] = 3,
+                            ["validateAction"] = true,
+                        },
+                    },
+                },
+            })
             .WithTimeout("initialize");
         await _session.Client.NotifyInitializedAsync().WithTimeout("initialized");
     }
@@ -241,23 +257,58 @@ public class EditorIntelligenceSemanticTests : IDisposable
     }
 
     [Fact]
-    public async Task ReferenceLens_CarriesTheShowReferencesCommandAtTheDeclaredName()
+    public async Task ReferenceLens_CarriesTheAnchoredActionCommandAndOpaqueToken()
     {
         await StartAsync();
         await OpenAsync();
 
         JToken lens = LensOn(await LensesAsync(), "Twice", "2 references");
 
-        Assert.Equal("cvolo.showReferences", lens["command"]!["command"]!.Value<string>());
+        Assert.Equal("cvolo.executeAnchoredLens", lens["command"]!["command"]!.Value<string>());
         JArray arguments = Assert.IsType<JArray>(lens["command"]!["arguments"]!);
 
-        // The editor resolves this document before it can run the reference provider, so it must be
-        // the URI the client sent rather than a local path, which would parse as a "d:" scheme.
-        Assert.Equal(Uri.AbsoluteUri, arguments[0]!.Value<string>());
+        // The clickable lens carries one opaque request whose wireUri is the URI the client sent
+        // (a local path would parse as a "d:" scheme) and never a raw position triple.
+        JObject request = Assert.IsType<JObject>(Assert.Single(arguments));
+        Assert.Equal(3, request["schemaVersion"]!.Value<int>());
+        Assert.Equal(Uri.AbsoluteUri, request["wireUri"]!.Value<string>());
+        Assert.False(string.IsNullOrEmpty(request["lensToken"]!.Value<string>()));
+    }
 
-        var expected = PositionOf(At("int Twice(int value)") + "int ".Length);
-        Assert.Equal(expected.Line, arguments[1]!["line"]!.Value<int>());
-        Assert.Equal(expected.Character, arguments[1]!["character"]!.Value<int>());
+    [Fact]
+    public async Task AnAnchoredReferenceLens_ResolvesToValidatedLocations_AndItsActionTokenIsSingleUse()
+    {
+        await StartAsync();
+        await OpenAsync();
+
+        // Take the opaque request the clickable lens handed the client and resolve it server-side.
+        JToken lens = LensOn(await LensesAsync(), "Twice", "2 references");
+        JObject request = Assert.IsType<JObject>(Assert.Single(Assert.IsType<JArray>(lens["command"]!["arguments"]!)));
+
+        AnchoredActionResultV3 action = await _session.Client
+            .ExecuteAnchoredLensAsync(request)
+            .WithTimeout("resolve anchored lens");
+
+        // The server re-resolved the references at click time and handed back the validated locations
+        // and the anchor, so the editor never re-queries a position that may have gone stale.
+        Assert.Equal(3, action.SchemaVersion);
+        Assert.Equal("ShowReferences", action.Kind);
+        Assert.False(string.IsNullOrEmpty(action.ActionToken));
+        Assert.Equal(Uri.AbsoluteUri, action.WireUri);
+        Assert.NotNull(action.Anchor);
+        Assert.NotNull(action.Locations);
+        Assert.NotEmpty(action.Locations!);
+
+        // The action token is single use and validated against the current document generation.
+        AnchoredValidationResultV3 first = await _session.Client
+            .ValidateAnchoredActionAsync(action.ActionToken!)
+            .WithTimeout("validate anchored action");
+        Assert.True(first.Valid);
+
+        AnchoredValidationResultV3 replay = await _session.Client
+            .ValidateAnchoredActionAsync(action.ActionToken!)
+            .WithTimeout("replay anchored action");
+        Assert.False(replay.Valid);
     }
 
     [Fact]
@@ -271,11 +322,12 @@ public class EditorIntelligenceSemanticTests : IDisposable
         // `byte Kind` + `int Length` is 5 payload bytes that the target aligns into 8, so the summary
         // must name the padding the compiler inserted rather than a size the client guessed.
         JToken header = LensOn(lenses, "Header", "size 8B, align 4B, padding 3B");
-        Assert.Equal("cvolo.showTypeLayout", header["command"]!["command"]!.Value<string>());
-        var expected = PositionOf(At("public struct Header") + "public struct ".Length);
-        var arguments = Assert.IsType<JArray>(header["command"]!["arguments"]!);
-        Assert.Equal(expected.Line, arguments[1]!["line"]!.Value<int>());
-        Assert.Equal(expected.Character, arguments[1]!["character"]!.Value<int>());
+        Assert.Equal("cvolo.executeAnchoredLens", header["command"]!["command"]!.Value<string>());
+        JArray arguments = Assert.IsType<JArray>(header["command"]!["arguments"]!);
+        JObject request = Assert.IsType<JObject>(Assert.Single(arguments));
+        Assert.Equal(3, request["schemaVersion"]!.Value<int>());
+        Assert.Equal(Uri.AbsoluteUri, request["wireUri"]!.Value<string>());
+        Assert.False(string.IsNullOrEmpty(request["lensToken"]!.Value<string>()));
 
         // Zero padding is reported explicitly rather than hidden.
         Assert.NotNull(LensOn(lenses, "Pair", "size 8B, align 4B, padding 0B"));
@@ -325,12 +377,12 @@ public class EditorIntelligenceSemanticTests : IDisposable
         // and the compiler's storage facts sit beside it on the same line.
         JToken length = LensOn(lenses, "Length", "offset 4B, size 4B, align 4B, pad 3B before");
         Assert.NotNull(LensOn(lenses, "Length", "0 references"));
-        Assert.Equal("cvolo.showTypeLayout", length["command"]!["command"]!.Value<string>());
+        Assert.Equal("cvolo.executeAnchoredLens", length["command"]!["command"]!.Value<string>());
 
-        var expected = PositionOf(At("public int Length;") + "public int ".Length);
-        JArray arguments = Assert.IsType<JArray>(length["command"]!["arguments"]!);
-        Assert.Equal(expected.Line, arguments[1]!["line"]!.Value<int>());
-        Assert.Equal(expected.Character, arguments[1]!["character"]!.Value<int>());
+        JObject request = Assert.IsType<JObject>(Assert.Single(Assert.IsType<JArray>(length["command"]!["arguments"]!)));
+        Assert.Equal(3, request["schemaVersion"]!.Value<int>());
+        Assert.Equal(Uri.AbsoluteUri, request["wireUri"]!.Value<string>());
+        Assert.False(string.IsNullOrEmpty(request["lensToken"]!.Value<string>()));
 
         // The first field starts the type, so it has no padding before it and says nothing about one.
         Assert.NotNull(LensOn(lenses, "Kind", "offset 0B, size 1B, align 1B"));

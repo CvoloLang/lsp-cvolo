@@ -41,9 +41,17 @@ public class CodeLensHandlerTests : IDisposable
 
     private Uri Uri => _workspace.DocumentUri("a.cvl");
 
-    private async Task StartAsync()
+    private async Task StartAsync(bool anchoredLens = true)
     {
-        await _session.Client.InitializeAsync().WithTimeout("initialize");
+        if (anchoredLens)
+        {
+            await _session.Client.InitializeWithAnchoredLensAsync().WithTimeout("initialize");
+        }
+        else
+        {
+            await _session.Client.InitializeAsync().WithTimeout("initialize");
+        }
+
         await _session.Client.NotifyInitializedAsync().WithTimeout("initialized");
     }
 
@@ -62,7 +70,7 @@ public class CodeLensHandlerTests : IDisposable
             new BackendCodeLensCommand("cvolo.showReferences", [new BackendCodeLensPositionArgument(start)]));
 
     [Fact]
-    public async Task Lenses_MapRangeAndCommandWithTheDocumentUriAndDeclarationPosition()
+    public async Task Lenses_MapRangeAndCarryAnOpaqueAnchoredCommand()
     {
         await StartAsync();
         await OpenAsync();
@@ -77,19 +85,21 @@ public class CodeLensHandlerTests : IDisposable
         Assert.Equal(8, lens["range"]!["end"]!["character"]!.Value<int>());
 
         Assert.Equal("3 references", lens["command"]!["title"]!.Value<string>());
-        Assert.Equal("cvolo.showReferences", lens["command"]!["command"]!.Value<string>());
+        Assert.Equal("cvolo.executeAnchoredLens", lens["command"]!["command"]!.Value<string>());
 
+        // The clickable lens carries a single opaque request token, never a positional
+        // (uri, line, character) triple that could go stale between paint and click. The URI it
+        // names must still be the one the client understands: a bare local path parses as a "d:"
+        // scheme and cannot be resolved.
         JArray arguments = Assert.IsType<JArray>(lens["command"]!["arguments"]!);
-        Assert.Equal(2, arguments.Count);
-
-        // The client resolves the document the command names, so the argument has to be the URI it
-        // understands: a bare local path parses as a "d:" scheme and cannot be resolved.
-        string document = arguments[0]!.Value<string>()!;
-        Assert.Equal(Uri.AbsoluteUri, document);
-        Assert.StartsWith("file:///", document, StringComparison.Ordinal);
+        JObject request = Assert.IsType<JObject>(Assert.Single(arguments));
+        Assert.Equal(3, request["schemaVersion"]!.Value<int>());
+        Assert.Equal(Uri.AbsoluteUri, request["wireUri"]!.Value<string>());
+        Assert.StartsWith("file:///", request["wireUri"]!.Value<string>(), StringComparison.Ordinal);
         Assert.Equal(_workspace.PathOf("a.cvl"), Uri.LocalPath);
-        Assert.Equal(0, arguments[1]!["line"]!.Value<int>());
-        Assert.Equal(4, arguments[1]!["character"]!.Value<int>());
+        Assert.False(string.IsNullOrEmpty(request["lensToken"]!.Value<string>()));
+        Assert.Null(request["line"]);
+        Assert.Null(request["character"]);
     }
 
     [Fact]
@@ -110,7 +120,7 @@ public class CodeLensHandlerTests : IDisposable
             ["1 reference", "size 24 B", "native"],
             lenses!.Select(lens => lens["command"]!["title"]!.Value<string>()).ToArray());
         Assert.Equal(
-            ["cvolo.showReferences", string.Empty, string.Empty],
+            ["cvolo.executeAnchoredLens", string.Empty, string.Empty],
             lenses!.Select(lens => lens["command"]!["command"]!.Value<string>()).ToArray());
     }
 
@@ -167,7 +177,7 @@ public class CodeLensHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task LensWhoseCommandPositionDoesNotMap_KeepsItsTextAndLosesItsCommand()
+    public async Task AReferencesLens_IsAnchoredByItsRangeStart_NotTheBackendPositionArgument()
     {
         await StartAsync();
         await OpenAsync();
@@ -184,7 +194,26 @@ public class CodeLensHandlerTests : IDisposable
 
         JToken lens = Assert.Single(lenses!);
         Assert.Equal("3 references", lens["command"]!["title"]!.Value<string>());
+
+        // The position the backend supplied (9000) is not a wire position any more. The lens is
+        // anchored to its verified range start, and the server re-resolves at execution time, so an
+        // out-of-range backend argument can no longer decide clickability.
+        Assert.Equal("cvolo.executeAnchoredLens", lens["command"]!["command"]!.Value<string>());
+    }
+
+    [Fact]
+    public async Task WithoutTheAnchoredLensCapability_LensesAreInertText_AndNeverTheLegacyCommand()
+    {
+        await StartAsync(anchoredLens: false);
+        await OpenAsync();
+        _backend.CannedCodeLenses = [References(4, 4, "3 references")];
+
+        JArray? lenses = await _session.Client.CodeLensAsync(Uri).WithTimeout("codeLens");
+
+        JToken lens = Assert.Single(lenses!);
+        Assert.Equal("3 references", lens["command"]!["title"]!.Value<string>());
         Assert.Equal(string.Empty, lens["command"]!["command"]!.Value<string>());
+        Assert.Empty(Assert.IsType<JArray>(lens["command"]!["arguments"]!));
     }
 
     [Fact]
@@ -315,13 +344,15 @@ public class CodeLensHandlerTests : IDisposable
         JToken lens = Assert.Single(lenses!);
         Assert.Equal("offset 4B, size 4B, align 4B, pad 3B before", lens["command"]!["title"]!.Value<string>());
 
-        // A field is not a type, so the action opens the layout of the type that stores it, at the
-        // field's own declaration. The client is handed the position, never a parsed field name.
-        Assert.Equal("cvolo.showTypeLayout", lens["command"]!["command"]!.Value<string>());
+        // A field is not a type, so the action opens the layout of the type that stores it, anchored
+        // at the field's own declaration. The client is handed an opaque token, never a parsed name
+        // or a raw position.
+        Assert.Equal("cvolo.executeAnchoredLens", lens["command"]!["command"]!.Value<string>());
         JArray arguments = Assert.IsType<JArray>(lens["command"]!["arguments"]!);
-        Assert.Equal(Uri.AbsoluteUri, arguments[0]!.Value<string>());
-        Assert.Equal(0, arguments[1]!["line"]!.Value<int>());
-        Assert.Equal(18, arguments[1]!["character"]!.Value<int>());
+        JObject request = Assert.IsType<JObject>(Assert.Single(arguments));
+        Assert.Equal(3, request["schemaVersion"]!.Value<int>());
+        Assert.Equal(Uri.AbsoluteUri, request["wireUri"]!.Value<string>());
+        Assert.False(string.IsNullOrEmpty(request["lensToken"]!.Value<string>()));
     }
 
     [Fact]

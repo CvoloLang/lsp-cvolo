@@ -100,6 +100,7 @@ internal sealed class SessionState
             initializeParams?.Capabilities?.TextDocument?.SignatureHelp?.SignatureInformation?.ActiveParameterSupport == true;
         CodeLensRefreshSupported = initializeParams?.Capabilities?.Workspace?.CodeLens?.RefreshSupport == true;
         InlayHintRefreshSupported = initializeParams?.Capabilities?.Workspace?.InlayHint?.RefreshSupport == true;
+        AnchoredLensSupported = ComputeAnchoredLensSupport(initializeParams);
         _initializeReceived = true;
     }
 
@@ -148,6 +149,22 @@ internal sealed class SessionState
 
     /// <summary>Whether the client supports <c>workspace/inlayHint/refresh</c>.</summary>
     public bool InlayHintRefreshSupported { get; private set; }
+
+    /// <summary>
+    /// Whether the client took part in the v3 anchored-lens handshake by advertising
+    /// <c>experimental.cvoloAnchoredLens = { version: 3, validateAction: true }</c>. Only such a client
+    /// is ever handed a clickable lens: the server presents a lens as inert text to any client that
+    /// cannot revalidate the click (§21, §39).
+    /// </summary>
+    public bool AnchoredLensSupported { get; private set; }
+
+    private static bool ComputeAnchoredLensSupport(InitializeRequestParams? initializeParams)
+    {
+        var anchored = initializeParams?.Capabilities?.Experimental?["cvoloAnchoredLens"];
+        return anchored is not null
+            && anchored.Value<int?>("version") == 3
+            && anchored.Value<bool?>("validateAction") == true;
+    }
 
     private EditorIntelligenceSettings _editorIntelligence = EditorIntelligenceSettings.Default;
 

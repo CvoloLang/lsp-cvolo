@@ -94,7 +94,7 @@ internal sealed class TypeLayoutHandler(ILspLogger logger, Func<DocumentStore> s
         return layout is null ? null : Map(layout);
     }
 
-    private static TypeLayoutResponse Map(BackendTypeLayoutInspection layout)
+    internal static TypeLayoutResponse Map(BackendTypeLayoutInspection layout)
     {
         IReadOnlyDictionary<DocumentUri, string> texts = layout.DocumentTexts ?? EmptyTexts;
         var indexes = new Dictionary<DocumentUri, LineIndex>();

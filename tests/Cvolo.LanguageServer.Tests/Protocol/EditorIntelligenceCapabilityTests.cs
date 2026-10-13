@@ -1,6 +1,7 @@
 using Cvolo.LanguageServer.Protocol;
 using Cvolo.LanguageServer.Tests.TestSupport;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
+using Newtonsoft.Json.Linq;
 using Xunit;
 using ServerCapabilities = Cvolo.LanguageServer.Protocol.ServerCapabilities;
 
@@ -118,16 +119,19 @@ public class EditorIntelligenceCapabilityTests : IDisposable
     }
 
     [Fact]
-    public async Task Initialize_AdvertisesNoExecuteCommandProvider()
+    public async Task Initialize_AdvertisesTheAnchoredLensExecuteCommandProvider()
     {
-        // The layout detail is a custom request, and the reference lens is a client-side command, so
-        // the server has no server-executed command surface to expose (§57, Inc 8).
+        // The anchored lens bridge exposes exactly one server-executed command (the CodeLens v3
+        // resolve endpoint) plus an experimental capability announcing the contract (§57, Inc 8/10).
         InitializeResponse response = await InitializeAsync(FullClientCapabilities());
 
-        IReadOnlyList<string> names = response.Capabilities.GetType()
-            .GetProperties()
-            .Select(property => property.Name)
-            .ToList();
-        Assert.DoesNotContain("ExecuteCommandProvider", names);
+        ServerCapabilities capabilities = response.Capabilities;
+        Assert.NotNull(capabilities.ExecuteCommandProvider);
+        Assert.Equal(["cvolo.resolveAnchoredLens.v3"], capabilities.ExecuteCommandProvider!.Commands);
+
+        JObject experimental = Assert.IsType<JObject>(capabilities.Experimental);
+        JObject anchored = Assert.IsType<JObject>(experimental["cvoloAnchoredLens"]);
+        Assert.Equal(3, anchored["version"]!.Value<int>());
+        Assert.True(anchored["validateAction"]!.Value<bool>());
     }
 }

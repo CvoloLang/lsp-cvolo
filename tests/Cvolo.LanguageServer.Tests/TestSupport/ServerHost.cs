@@ -82,6 +82,7 @@ internal sealed class ServerHost : IDisposable
         AddTarget(rpc, server.SelectionRanges);
         AddTarget(rpc, server.TypeLayout);
         AddTarget(rpc, server.Configuration);
+        AddTarget(rpc, server.AnchoredLens);
         configureRpc?.Invoke(rpc);
         rpc.StartListening();
 

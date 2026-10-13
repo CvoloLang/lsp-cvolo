@@ -49,6 +49,48 @@ internal sealed class TestClient : IDisposable
         return _rpc.InvokeWithParameterObjectAsync<InitializeResponse>(Methods.InitializeName, payload);
     }
 
+    /// <summary>
+    /// Initializes advertising the anchored-lens (CodeLens v3) experimental capability,
+    /// so the server emits clickable <c>cvolo.executeAnchoredLens</c> commands.
+    /// </summary>
+    public Task<InitializeResponse> InitializeWithAnchoredLensAsync()
+    {
+        return InitializeWithAsync(new InitializeRequestParams
+        {
+            Capabilities = new ClientCapabilitiesPayload
+            {
+                Experimental = new JObject
+                {
+                    ["cvoloAnchoredLens"] = new JObject
+                    {
+                        ["version"] = 3,
+                        ["validateAction"] = true,
+                    },
+                },
+            },
+        });
+    }
+
+    /// <summary>Invokes the anchored CodeLens v3 resolve command.</summary>
+    public Task<AnchoredActionResultV3> ExecuteAnchoredLensAsync(JObject request)
+    {
+        return _rpc.InvokeWithParameterObjectAsync<AnchoredActionResultV3>(
+            "workspace/executeCommand",
+            new ExecuteCommandParamsPayload
+            {
+                Command = "cvolo.resolveAnchoredLens.v3",
+                Arguments = new JArray(request),
+            });
+    }
+
+    /// <summary>Invokes the anchored CodeLens v3 action-validation request (single-use token).</summary>
+    public Task<AnchoredValidationResultV3> ValidateAnchoredActionAsync(string actionToken)
+    {
+        return _rpc.InvokeWithParameterObjectAsync<AnchoredValidationResultV3>(
+            "cvolo/validateAnchoredAction.v3",
+            new AnchoredActionValidationV3(actionToken));
+    }
+
     public Task NotifyInitializedAsync()
     {
         return _rpc.NotifyAsync(Methods.InitializedName, new InitializedParams());
