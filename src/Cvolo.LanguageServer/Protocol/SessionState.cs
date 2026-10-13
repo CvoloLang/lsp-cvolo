@@ -167,12 +167,19 @@ internal sealed class SessionState
     }
 
     private EditorIntelligenceSettings _editorIntelligence = EditorIntelligenceSettings.Default;
+    private SemanticTokensSettings _semanticTokens = SemanticTokensSettings.Default;
 
     /// <summary>
     /// The editor intelligence settings currently in force (§64). Read on every semantic request,
     /// so a change takes effect for the next request without a restart (§65).
     /// </summary>
     public EditorIntelligenceSettings EditorIntelligence => Volatile.Read(ref _editorIntelligence);
+
+    /// <summary>
+    /// The semantic-token resource budget currently in force. Read on every semantic-token request, so
+    /// a configuration change takes effect for the next request without a restart (§65).
+    /// </summary>
+    public SemanticTokensSettings SemanticTokens => Volatile.Read(ref _semanticTokens);
 
     /// <summary>
     /// Adopts the settings from a configuration notification. Returns whether anything actually
@@ -186,14 +193,19 @@ internal sealed class SessionState
             return false;
         }
 
-        EditorIntelligenceSettings current = EditorIntelligence;
-        EditorIntelligenceSettings updated = EditorIntelligenceSettings.FromConfiguration(settings, current);
-        if (updated == current)
+        EditorIntelligenceSettings currentEditor = EditorIntelligence;
+        EditorIntelligenceSettings updatedEditor = EditorIntelligenceSettings.FromConfiguration(settings, currentEditor);
+
+        SemanticTokensSettings currentTokens = SemanticTokens;
+        SemanticTokensSettings updatedTokens = SemanticTokensSettings.FromConfiguration(settings, currentTokens);
+
+        if (updatedEditor == currentEditor && updatedTokens == currentTokens)
         {
             return false;
         }
 
-        Volatile.Write(ref _editorIntelligence, updated);
+        Volatile.Write(ref _editorIntelligence, updatedEditor);
+        Volatile.Write(ref _semanticTokens, updatedTokens);
         return true;
     }
 

@@ -197,7 +197,7 @@ internal sealed class LanguageServer(
     /// <summary>
     /// textDocument/semanticTokens/full handler.
     /// </summary>
-    internal SemanticTokensHandler SemanticTokens => GetOrCreate(ref _semanticTokens, () => new SemanticTokensHandler(logger, () => Store, () => _state.SemanticTokenTypes, () => _state.SemanticTokenModifiers));
+    internal SemanticTokensHandler SemanticTokens => GetOrCreate(ref _semanticTokens, () => new SemanticTokensHandler(logger, () => Store, () => _state.SemanticTokenTypes, () => _state.SemanticTokenModifiers, () => _state.SemanticTokens.MaxInteractiveTextLength));
 
     /// <summary>textDocument/references handler.</summary>
     internal ReferencesHandler References => GetOrCreate(ref _references, () => new ReferencesHandler(logger, () => Store));

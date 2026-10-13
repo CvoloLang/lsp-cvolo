@@ -343,12 +343,18 @@ internal sealed class BlockingBackend : ILanguageBackend
 
     public BackendSemanticTokenResult GetSemanticTokens(BackendSnapshot snapshot, BackendDocumentHandle document)
     {
+        Interlocked.Increment(ref _semanticTokensCalls);
         EnterNavigation();
         return CannedSemanticTokens;
     }
 
     /// <summary>The semantic-token result returned by <see cref="GetSemanticTokens"/>.</summary>
     public BackendSemanticTokenResult CannedSemanticTokens { get; set; } = new([]);
+
+    /// <summary>Number of times <see cref="GetSemanticTokens"/> was called.</summary>
+    public int SemanticTokensCalls => _semanticTokensCalls;
+
+    private int _semanticTokensCalls;
 
     private void EnterNavigation()
     {

@@ -18,10 +18,9 @@ internal sealed class SemanticTokensHandler(
     ILspLogger logger,
     Func<DocumentStore> storeAccessor,
     Func<string[]> tokenTypesAccessor,
-    Func<string[]> tokenModifiersAccessor)
+    Func<string[]> tokenModifiersAccessor,
+    Func<int> maxInteractiveTextLengthAccessor)
 {
-    private const int SemanticTokensMaxInteractiveTextLength = 100_000;
-
     private DocumentStore? _store;
 
     private DocumentStore Store => _store ??= storeAccessor();
@@ -54,11 +53,12 @@ internal sealed class SemanticTokensHandler(
         }
         LogTiming("capture", stopwatch, documentUri);
 
-        if (context.Document.Text.Length > SemanticTokensMaxInteractiveTextLength)
+        int maxInteractiveTextLength = maxInteractiveTextLengthAccessor();
+        if (context.Document.Text.Length > maxInteractiveTextLength)
         {
             // An oversized document is a resource denial, not proof that a nonempty document has
             // zero semantic tokens: return a typed non-success, never a successful empty array.
-            logger.Warning($"[perf] semanticTokens refused for large document: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={SemanticTokensMaxInteractiveTextLength}");
+            logger.Warning($"[perf] semanticTokens refused for large document: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={maxInteractiveTextLength}");
             throw TypedError(
                 "Semantic tokens are unavailable for this document because it exceeds the interactive resource budget.",
                 CvoloErrorData.BackendUnavailable,

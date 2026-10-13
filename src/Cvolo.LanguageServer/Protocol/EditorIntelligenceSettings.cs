@@ -97,7 +97,7 @@ internal sealed record EditorIntelligenceSettings
     /// </summary>
     private static BackendOffsetFormat? ReadOffsetFormat(JObject settings)
     {
-        JToken? token = ReadToken(settings, "layout", "offsetFormat");
+        JToken? token = ConfigurationReader.ReadToken(settings, "layout", "offsetFormat");
         if (token?.Type != JTokenType.String)
         {
             return null;
@@ -118,62 +118,5 @@ internal sealed record EditorIntelligenceSettings
     /// the wrong type is treated as absent rather than as a preference.
     /// </summary>
     private static bool? ReadBool(JObject settings, string section, string name) =>
-        AsBool(ReadToken(settings, section, name));
-
-    /// <summary>
-    /// Reads one raw setting value, trying the fully qualified key first, then the section object the
-    /// client may already have nested under <c>cvolo</c>. <paramref name="remaining"/> bounds how
-    /// many such container levels are unwrapped, so a self-referential payload cannot loop.
-    /// </summary>
-    private static JToken? ReadToken(JObject settings, string section, string name, int remaining = 2)
-    {
-        if (TryReadToken(settings, $"cvolo.{section}.{name}", out JToken? qualified))
-        {
-            return qualified;
-        }
-
-        if (TryReadToken(settings, section, out JToken? sectionToken)
-            && sectionToken is JObject nested
-            && TryReadToken(nested, name, out JToken? nestedToken))
-        {
-            return nestedToken;
-        }
-
-        if (remaining > 0
-            && TryReadToken(settings, "cvolo", out JToken? container)
-            && container is JObject scoped)
-        {
-            return ReadToken(scoped, section, name, remaining - 1);
-        }
-
-        return null;
-    }
-
-    private static bool TryReadToken(JObject container, string key, out JToken? token)
-    {
-        JToken? exact = container[key];
-        if (exact is not null)
-        {
-            token = exact;
-            return true;
-        }
-
-        foreach (JProperty property in container.Properties())
-        {
-            if (string.Equals(property.Name, key, StringComparison.OrdinalIgnoreCase))
-            {
-                token = property.Value;
-                return true;
-            }
-        }
-
-        token = null;
-        return false;
-    }
-
-    /// <summary>
-    /// Only a real JSON boolean is accepted. A value of another type is treated as absent rather
-    /// than guessed, so a malformed configuration notification cannot silently flip a default.
-    /// </summary>
-    private static bool? AsBool(JToken? token) => token?.Type == JTokenType.Boolean ? token.Value<bool>() : null;
+        ConfigurationReader.AsBool(ConfigurationReader.ReadToken(settings, section, name));
 }
