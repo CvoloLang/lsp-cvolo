@@ -179,7 +179,7 @@ public class SemanticTokensConcurrencyTests : IDisposable
     }
 
     [Fact]
-    public async Task DidChange_WithRefreshSupport_SendsRefreshRequest()
+    public async Task DidChange_WithRefreshSupport_SendsNoRefreshRequest()
     {
         await StartAsync(refresh: true);
         await OpenAsync("a.cvl", 1, "int main() { return 0; }\n");
@@ -187,9 +187,14 @@ public class SemanticTokensConcurrencyTests : IDisposable
         _session.Server.ResetServerFrames();
         await _session.Client.NotifyDidChangeAsync(Uri("a.cvl"), 2, new TextDocumentContentChangeEvent { Text = "int main() { return 1; }\n" });
 
-        await _session.Client.WaitUntilAsync(
-            () => _session.Server.GetServerFrames().Any(frame => frame.Contains("workspace/semanticTokens/refresh", StringComparison.Ordinal)),
-            "semantic-token refresh request");
+        // The refresh coordinator coalesces on a 350ms quiet period. Wait past it so a regression that
+        // reintroduced a per-edit global refresh would be observed instead of racing the assertion.
+        await Task.Delay(450);
+        await _session.Client.DrainNotificationsAsync();
+
+        Assert.DoesNotContain(
+            _session.Server.GetServerFrames(),
+            frame => frame.Contains("workspace/semanticTokens/refresh", StringComparison.Ordinal));
     }
 
     [Fact]

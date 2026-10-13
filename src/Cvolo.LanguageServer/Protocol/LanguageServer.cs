@@ -126,9 +126,10 @@ internal sealed class LanguageServer(
     });
 
     /// <summary>
-    /// Text document synchronization (didOpen/didChange/didClose) handler. A project change is
-    /// broadcast to every client-refreshable surface so editor state stays live while typing:
-    /// semantic tokens and (when the client can receive them) code lenses and inlay hints.
+    /// Text document synchronization (didOpen/didChange/didClose) handler. Ordinary edits do NOT
+    /// trigger a global client refresh: each editor request is answered from the current snapshot at
+    /// request time, and proactive refresh is reserved for a committed readiness transition
+    /// (Pending→Ready) so a typing burst never produces one global refresh per keystroke.
     /// </summary>
     internal TextDocumentSyncHandler Sync => GetOrCreate(
         ref _sync,
@@ -136,11 +137,7 @@ internal sealed class LanguageServer(
             logger,
             _diagnostics,
             () => Store,
-            () =>
-            {
-                Refresh.RequestRefresh();
-                EditorIntelligenceRefresh.RequestRefresh();
-            },
+            null,
             () => Ingress?.Inputs));
 
     /// <summary>
