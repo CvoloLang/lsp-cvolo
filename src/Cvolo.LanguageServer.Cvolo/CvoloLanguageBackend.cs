@@ -338,18 +338,42 @@ internal sealed partial class CvoloLanguageBackend(
         next = null;
         try
         {
-            var reader = new RecordingCompilerInputReader(FileSystemCompilerInputReader.Instance);
-            var request = new ToolingCaptureRequest(session.Project.ProjectPath, overrides, _libraryPaths);
-            CaptureResult capture = session.Workspace.CaptureUniverseV1(request, reader);
-            if (capture is not CaptureResult.Captured captured)
+            var toolingAssembly = session.Workspace.GetType().Assembly;
+            Type? readerType = toolingAssembly.GetType("Cvolo.Compiler.Tooling.RecordingCompilerInputReader");
+            Type? fileSystemReaderType = toolingAssembly.GetType("Cvolo.Compiler.Tooling.FileSystemCompilerInputReader");
+            Type? requestType = toolingAssembly.GetType("Cvolo.Compiler.Tooling.ToolingCaptureRequest");
+            var captureMethod = session.Workspace.GetType().GetMethod("CaptureUniverseV1");
+            var buildMethod = session.Workspace.GetType().GetMethod("BuildSnapshotFromCaptureV1");
+            if (readerType is null || fileSystemReaderType is null || requestType is null || captureMethod is null || buildMethod is null)
                 return false;
 
-            BuildResult build = session.Workspace.BuildSnapshotFromCaptureV1(captured.Capture, session.Project);
-            if (build is not BuildResult.Ready ready)
+            object? fileSystemReader = fileSystemReaderType.GetProperty("Instance")?.GetValue(null);
+            if (fileSystemReader is null)
                 return false;
 
-            session.SetProject(ready.Project);
-            next = ready.Snapshot;
+            object? reader = Activator.CreateInstance(readerType, fileSystemReader);
+            object? request = Activator.CreateInstance(requestType, session.Project.ProjectPath, overrides, _libraryPaths, null, false);
+            if (reader is null || request is null)
+                return false;
+
+            object? capture = captureMethod.Invoke(session.Workspace, new[] { request, reader });
+            if (capture?.GetType().Name != "Captured")
+                return false;
+
+            object? frozenCapture = capture.GetType().GetProperty("Capture")?.GetValue(capture);
+            if (frozenCapture is null)
+                return false;
+
+            object? build = buildMethod.Invoke(session.Workspace, new[] { frozenCapture, session.Project });
+            if (build?.GetType().Name != "Ready")
+                return false;
+
+            if (build.GetType().GetProperty("Project")?.GetValue(build) is not CvoloProject readyProject ||
+                build.GetType().GetProperty("Snapshot")?.GetValue(build) is not ProjectSnapshot readySnapshot)
+                return false;
+
+            session.SetProject(readyProject);
+            next = readySnapshot;
             return true;
         }
         catch (Exception ex)

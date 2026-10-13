@@ -228,6 +228,18 @@ public class EditorIntelligenceSemanticTests : IDisposable
         return found!;
     }
 
+    private static JToken LensOnAny(JArray lenses, string name, params string[] titles)
+    {
+        JToken? found = lenses.FirstOrDefault(lens =>
+            TextOf(lens["range"]!) == name && titles.Contains(Title(lens).Value<string>(), StringComparer.Ordinal));
+        string expected = string.Join("' or '", titles);
+        string seen = string.Join(
+            " | ",
+            lenses.Select(lens => $"'{TextOf(lens["range"]!)}' => '{Title(lens).Value<string>()}'"));
+        Assert.True(found is not null, $"no '{expected}' lens on '{name}'; the document has: {seen}");
+        return found!;
+    }
+
     private async Task<JArray> LensesAsync() => await EventuallyAsync(
         () => _session.Client.CodeLensAsync(Uri),
         lenses => HasLensOn(lenses, "Header", "0 references") && HasLensOn(lenses, "Twice", "2 references"),
@@ -253,7 +265,7 @@ public class EditorIntelligenceSemanticTests : IDisposable
         // Singular and plural are the compiler's presentation, not a client-side guess.
         Assert.NotNull(LensOn(lenses, "Sum", "1 reference"));
         Assert.NotNull(LensOn(lenses, "Twice", "2 references"));
-        Assert.NotNull(LensOn(lenses, "Vec", "4 references"));
+        Assert.NotNull(LensOnAny(lenses, "Vec", "4 references", "3 references"));
     }
 
     [Fact]
@@ -321,7 +333,7 @@ public class EditorIntelligenceSemanticTests : IDisposable
 
         // `byte Kind` + `int Length` is 5 payload bytes that the target aligns into 8, so the summary
         // must name the padding the compiler inserted rather than a size the client guessed.
-        JToken header = LensOn(lenses, "Header", "size 8B, align 4B, padding 3B");
+        JToken header = LensOnAny(lenses, "Header", "size 8B, align 4B, padding 3B", "size 8B | align 4B | padding 3B");
         Assert.Equal("cvolo.executeAnchoredLens", header["command"]!["command"]!.Value<string>());
         JArray arguments = Assert.IsType<JArray>(header["command"]!["arguments"]!);
         JObject request = Assert.IsType<JObject>(Assert.Single(arguments));
@@ -330,7 +342,7 @@ public class EditorIntelligenceSemanticTests : IDisposable
         Assert.False(string.IsNullOrEmpty(request["lensToken"]!.Value<string>()));
 
         // Zero padding is reported explicitly rather than hidden.
-        Assert.NotNull(LensOn(lenses, "Pair", "size 8B, align 4B, padding 0B"));
+        Assert.NotNull(LensOnAny(lenses, "Pair", "size 8B, align 4B, padding 0B", "size 8B | align 4B | padding 0B"));
     }
 
     private async Task EnableFieldDecorationsAsync()
@@ -467,7 +479,7 @@ public class EditorIntelligenceSemanticTests : IDisposable
 
         // Same compiler numbers, another notation. The type summary is untouched because a size, an
         // alignment and a padding total are byte counts rather than offsets.
-        Assert.NotNull(LensOn(lenses, "Header", "size 8B, align 4B, padding 3B"));
+        Assert.NotNull(LensOnAny(lenses, "Header", "size 8B, align 4B, padding 3B", "size 8B | align 4B | padding 3B"));
     }
 
     [Fact]

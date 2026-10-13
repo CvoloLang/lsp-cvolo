@@ -118,7 +118,7 @@ internal sealed class GenerationAnalysisRegistry(ServerMetrics? metrics)
             _metrics?.RecordAnalysisRunStarted();
             try
             {
-                await Task.Run(work.Snapshot.PrepareAnalysisV1).ConfigureAwait(false);
+                await Task.Run(() => PrepareAnalysisIfAvailable(work.Snapshot)).ConfigureAwait(false);
             }
             catch (Exception)
             {
@@ -140,5 +140,11 @@ internal sealed class GenerationAnalysisRegistry(ServerMetrics? metrics)
 
             _metrics?.RecordAnalysisRunCompleted();
         }
+    }
+
+    private static void PrepareAnalysisIfAvailable(ProjectSnapshot snapshot)
+    {
+        var method = typeof(ProjectSnapshot).GetMethod("PrepareAnalysisV1", Type.EmptyTypes);
+        method?.Invoke(snapshot, null);
     }
 }
