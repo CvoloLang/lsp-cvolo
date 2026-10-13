@@ -2,6 +2,7 @@ using Cvolo.LanguageServer.Core;
 using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
+using Cvolo.LanguageServer.Protocol;
 using Cvolo.LanguageServer.Tests.TestSupport;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using Newtonsoft.Json.Linq;
@@ -214,6 +215,51 @@ public class CodeLensHandlerTests : IDisposable
         Assert.Equal("3 references", lens["command"]!["title"]!.Value<string>());
         Assert.Equal(string.Empty, lens["command"]!["command"]!.Value<string>());
         Assert.Empty(Assert.IsType<JArray>(lens["command"]!["arguments"]!));
+    }
+
+    [Theory]
+    [InlineData(3, true, true)]
+    [InlineData(3, false, false)]
+    [InlineData(2, true, false)]
+    [InlineData(0, false, false)] // no experimental capability advertised at all
+    public async Task AnchoredLensCommand_IsEmittedOnlyForTheSupportedV3Handshake(int version, bool validateAction, bool anchored)
+    {
+        await _session.Client.InitializeWithAsync(new InitializeRequestParams
+        {
+            Capabilities = new ClientCapabilitiesPayload
+            {
+                Experimental = version > 0
+                    ? new JObject
+                    {
+                        ["cvoloAnchoredLens"] = new JObject
+                        {
+                            ["version"] = version,
+                            ["validateAction"] = validateAction,
+                        },
+                    }
+                    : null,
+            },
+        }).WithTimeout("initialize");
+        await _session.Client.NotifyInitializedAsync().WithTimeout("initialized");
+        await OpenAsync();
+        _backend.CannedCodeLenses = [References(4, 4, "1 reference")];
+
+        JArray? lenses = await _session.Client.CodeLensAsync(Uri).WithTimeout("codeLens");
+        JToken lens = Assert.Single(lenses!);
+
+        // Only version 3 with validateAction:true opts the client into clickable anchored lenses;
+        // anything else (wrong version, missing validation, or no capability) stays inert text and
+        // never receives the legacy positional command.
+        if (anchored)
+        {
+            Assert.Equal("cvolo.executeAnchoredLens", lens["command"]!["command"]!.Value<string>());
+            Assert.Single(Assert.IsType<JArray>(lens["command"]!["arguments"]!));
+        }
+        else
+        {
+            Assert.Equal(string.Empty, lens["command"]!["command"]!.Value<string>());
+            Assert.Empty(Assert.IsType<JArray>(lens["command"]!["arguments"]!));
+        }
     }
 
     [Fact]

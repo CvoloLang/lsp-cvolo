@@ -5,6 +5,7 @@ using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
 using Cvolo.LanguageServer.Protocol;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
 using StreamJsonRpc;
 using LanguageServerImpl = Cvolo.LanguageServer.Protocol.LanguageServer;
@@ -106,6 +107,35 @@ internal sealed class ServerHost : IDisposable
     public void ResetServerFrames()
     {
         _serverOutput.ResetRecording();
+    }
+
+    /// <summary>
+    /// Returns the last JSON-RPC error object the server wrote to the wire, or
+    /// <c>null</c> when no error frame has been recorded. This inspects the actual
+    /// serialized payload (code and data), not an in-process exception.
+    /// </summary>
+    public JObject? LastJsonRpcError()
+    {
+        IReadOnlyList<string> frames = GetServerFrames();
+        for (int i = frames.Count - 1; i >= 0; i--)
+        {
+            JObject? parsed;
+            try
+            {
+                parsed = JObject.Parse(frames[i]);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            if (parsed["error"] is JObject error)
+            {
+                return error;
+            }
+        }
+
+        return null;
     }
 
     public void Dispose()

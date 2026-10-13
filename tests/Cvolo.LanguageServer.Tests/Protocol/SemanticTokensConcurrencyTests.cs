@@ -88,6 +88,24 @@ public class SemanticTokensConcurrencyTests : IDisposable
     private static BackendSemanticToken Token(int start, int length, BackendSymbolKind kind = BackendSymbolKind.Function, BackendSemanticTokenModifiers modifiers = BackendSemanticTokenModifiers.Declaration)
         => new(new TextSpan(start, length), kind, modifiers);
 
+    /// <summary>
+    /// Asserts the last error the server actually wrote to the wire: the serialized
+    /// JSON-RPC code and the <c>error.data</c> fields (<c>cvoloKind</c>, <c>retryable</c>,
+    /// <c>reason</c>), not the in-process exception.
+    /// </summary>
+    private void AssertTypedWireError(string expectedKind, string? expectedReason)
+    {
+        JObject? error = _session.Server.LastJsonRpcError();
+        Assert.NotNull(error);
+        Assert.Equal(-32803, (int?)error!["code"]);
+
+        JObject data = Assert.IsType<JObject>(error["data"]);
+        Assert.Equal(expectedKind, (string?)data["cvoloKind"]);
+        Assert.True((bool?)data["retryable"]);
+        Assert.Equal(expectedReason, (string?)data["reason"]);
+        Assert.Null(data["retryAfterMs"]);
+    }
+
     [Fact]
     public async Task MalformedAndOverlappingTokens_AreRejectedWithoutCorruptingTheResponse()
     {
@@ -131,6 +149,7 @@ public class SemanticTokensConcurrencyTests : IDisposable
         RemoteInvocationException error = await Assert.ThrowsAsync<RemoteInvocationException>(
             () => inFlight.WithTimeout("stale semantic tokens"));
         Assert.Equal(-32803, (int?)error.ErrorCode);
+        AssertTypedWireError(CvoloErrorData.SupersededByQueuedInput, expectedReason: null);
     }
 
     [Fact]
@@ -146,6 +165,7 @@ public class SemanticTokensConcurrencyTests : IDisposable
         Assert.True(_backend.WaitUntilNavigationEntered(TimeSpan.FromSeconds(5)), "backend semantic tokens should be entered");
 
         cts.Cancel();
+        await _session.Client.WaitUntilAsync(_session.Client.HasSentCancelRequest, "cancel request sent");
         await _session.Client.DrainNotificationsAsync();
         await Task.Delay(100);
         _backend.ReleaseNavigation();
@@ -159,6 +179,7 @@ public class SemanticTokensConcurrencyTests : IDisposable
         {
         }
 
+        Assert.True(_session.Client.HasSentCancelRequest(), "the client should have sent $/cancelRequest");
         Assert.NotNull(await _session.Client.SemanticTokensAsync(Uri("a.cvl")).WithTimeout("next semantic tokens"));
     }
 
@@ -172,6 +193,7 @@ public class SemanticTokensConcurrencyTests : IDisposable
         RemoteInvocationException error = await Assert.ThrowsAsync<RemoteInvocationException>(
             () => _session.Client.SemanticTokensAsync(Uri("a.cvl")).WithTimeout("failing semantic tokens"));
         Assert.Equal(-32803, (int?)error.ErrorCode);
+        AssertTypedWireError(CvoloErrorData.BackendUnavailable, CvoloErrorData.BackendFailure);
 
         _backend.ThrowOnNavigation = false;
         _backend.CannedSemanticTokens = new BackendSemanticTokenResult([Token(4, 4)]);

@@ -101,6 +101,23 @@ public class SemanticTokensBudgetTests : IDisposable
     private static BackendSemanticTokenResult Tokens() =>
         new([new BackendSemanticToken(new TextSpan(0, 4), BackendSymbolKind.Function, BackendSemanticTokenModifiers.Declaration)]);
 
+    /// <summary>
+    /// Asserts the serialized refusal the server wrote to the wire carries the typed
+    /// resource-limit data an editor can key off, not just the in-process exception.
+    /// </summary>
+    private void AssertResourceLimitWireError()
+    {
+        JObject? error = _session.Server.LastJsonRpcError();
+        Assert.NotNull(error);
+        Assert.Equal(-32803, (int?)error!["code"]);
+
+        JObject data = Assert.IsType<JObject>(error["data"]);
+        Assert.Equal(CvoloErrorData.BackendUnavailable, (string?)data["cvoloKind"]);
+        Assert.True((bool?)data["retryable"]);
+        Assert.Equal(CvoloErrorData.ResourceLimit, (string?)data["reason"]);
+        Assert.Null(data["retryAfterMs"]);
+    }
+
     [Fact]
     public async Task ADocumentAtTheBudget_IsServed_AndOneCharacterOver_IsRefused()
     {
@@ -117,6 +134,7 @@ public class SemanticTokensBudgetTests : IDisposable
         RemoteInvocationException error = await Assert.ThrowsAsync<RemoteInvocationException>(
             () => _session.Client.SemanticTokensAsync(Uri("a.cvl")).WithTimeout("over the budget"));
         Assert.Equal(-32803, (int?)error.ErrorCode);
+        AssertResourceLimitWireError();
     }
 
     [Fact]
@@ -165,6 +183,7 @@ public class SemanticTokensBudgetTests : IDisposable
         RemoteInvocationException error = await Assert.ThrowsAsync<RemoteInvocationException>(
             () => _session.Client.SemanticTokensAsync(Uri("a.cvl")).WithTimeout("over budget"));
         Assert.Equal(-32803, (int?)error.ErrorCode);
+        AssertResourceLimitWireError();
 
         Assert.Equal(callsBefore, _backend.SemanticTokensCalls);
     }
