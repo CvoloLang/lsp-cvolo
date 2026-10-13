@@ -57,4 +57,4 @@ jobs:
         run: dotnet build src/Cvolo.LanguageServer.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true
 
       - name: Test
-        run: dotnet test tests/Cvolo.LanguageServer.Tests/Cvolo.LanguageServer.Tests.csproj -c Release --no-restore -p:ContinuousIntegrationBuild=true
+        run: dotnet run --project tests/Cvolo.LanguageServer.Tests/Cvolo.LanguageServer.Tests.csproj -c Release --no-restore -p:ContinuousIntegrationBuild=true
