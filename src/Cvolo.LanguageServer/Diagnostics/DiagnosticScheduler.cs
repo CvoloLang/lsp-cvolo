@@ -62,7 +62,7 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
         try
         {
             BackendDocumentHandle[] handles = context.Targets.Select(target => target.Document).ToArray();
-            run = CollapseParserRecoveryDiagnostics(store.GetDiagnostics(context.CurrentProjectSnapshot, handles));
+            run = store.GetDiagnostics(context.CurrentProjectSnapshot, handles);
         }
         catch (Exception ex)
         {
@@ -91,30 +91,6 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
         {
             logger.Warning($"Publishing diagnostics for project '{project}' failed: {ex.Message}");
         }
-    }
-
-    /// <summary>
-    /// Suppress only a known parser-recovery cascade: when the parser already reports
-    /// "no viable alternative" at a location, the follow-up "associated functions
-    /// only in extension" error is an artifact of the recovery interpretation.
-    /// A standalone CVL1045 is retained. The CVL4004 syntax error is never hidden.
-    /// </summary>
-    internal static BackendDiagnosticRun CollapseParserRecoveryDiagnostics(BackendDiagnosticRun run)
-    {
-        HashSet<(DocumentUri Document, int Start)> parseFailures = run.Diagnostics
-            .Where(d => string.Equals(d.Code, "CVL4004", StringComparison.Ordinal))
-            .Select(d => (d.Location.Document, d.Location.Span.Start))
-            .ToHashSet();
-
-        if (parseFailures.Count == 0)
-            return run;
-
-        BackendDiagnostic[] filtered = run.Diagnostics.Where(d =>
-            !string.Equals(d.Code, "CVL1045", StringComparison.Ordinal)
-            || !parseFailures.Contains((d.Location.Document, d.Location.Span.Start)))
-            .ToArray();
-
-        return filtered.Length == run.Diagnostics.Count ? run : run with { Diagnostics = filtered };
     }
 
     private void HandleFailure(BackendProject project, ProjectWorker worker, DiagnosticRunContext? context, Exception ex)
