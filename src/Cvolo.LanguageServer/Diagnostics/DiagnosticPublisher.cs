@@ -89,6 +89,18 @@ internal sealed class DiagnosticPublisher(ILspLogger logger, DiagnosticSink sink
         sink.Publish(new PublishDiagnosticsPayload(ToUri(uri), null, Array.Empty<DiagnosticPayload>()));
     }
 
+    public void PublishUnavailable(IReadOnlyList<DiagnosticPublishTarget> targets)
+    {
+        logger.Warning(
+            $"[diag] analysis unavailable for {targets.Count} document(s); clearing marks as an explicit unavailability signal, not a clean result.");
+        foreach (DiagnosticPublishTarget target in targets)
+        {
+            // Clear stale marks, but the caller records unavailability separately so this
+            // empty publication is never interpreted as "validated with zero diagnostics".
+            sink.Publish(new PublishDiagnosticsPayload(ToUri(target.Uri), null, Array.Empty<DiagnosticPayload>()));
+        }
+    }
+
     private bool TryMap(BackendDiagnostic diagnostic, IReadOnlyDictionary<DocumentUri, LineIndex> indexes, out DiagnosticPayload mapped)
     {
         if (!indexes.TryGetValue(diagnostic.Location.Document, out LineIndex? index)

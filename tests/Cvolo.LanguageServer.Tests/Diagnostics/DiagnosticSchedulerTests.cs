@@ -150,7 +150,7 @@ public class DiagnosticSchedulerTests
     }
 
     [Fact]
-    public async Task ThreeConsecutiveFailures_PublishEmptyRecovery_WithWarning()
+    public async Task ThreeConsecutiveFailures_PublishUnavailableStateWithWarning()
     {
         var harness = new Harness { FailDiagnostics = true };
         harness.Store.Open(DocA, "cvolo", 1, "text");
@@ -161,11 +161,15 @@ public class DiagnosticSchedulerTests
         harness.Scheduler.Schedule(project);
         await WaitUntil(() => harness.Backend.GetDiagnosticsCalls == 2, "failure 2");
 
-        Assert.Equal(0, harness.Publisher.EmptyCalls);
+        Assert.Equal(0, harness.Publisher.UnavailableCalls);
+        Assert.False(harness.Scheduler.IsUnavailable(project));
 
         harness.Scheduler.Schedule(project);
-        await WaitUntil(() => harness.Publisher.EmptyCalls >= 1, "recovery publication");
+        await WaitUntil(() => harness.Publisher.UnavailableCalls >= 1, "unavailable publication");
 
+        // The failure is reported as unavailability, never as a certified-clean empty set.
+        Assert.Equal(0, harness.Publisher.EmptyCalls);
+        Assert.True(harness.Scheduler.IsUnavailable(project));
         Assert.True(harness.Logger.Has("Warning", "consecutively"));
     }
 
@@ -182,15 +186,16 @@ public class DiagnosticSchedulerTests
         harness.FailDiagnostics = false;
         harness.Scheduler.Schedule(project);
         await WaitUntil(() => harness.Backend.GetDiagnosticsCalls == 3, "success");
+        await WaitUntil(() => !harness.Scheduler.IsUnavailable(project), "availability restored");
 
         harness.FailDiagnostics = true;
         await FailAsync(harness, project, 4);
         await FailAsync(harness, project, 5);
 
-        Assert.Equal(0, harness.Publisher.EmptyCalls);
+        Assert.Equal(0, harness.Publisher.UnavailableCalls);
 
         await FailAsync(harness, project, 6);
-        await WaitUntil(() => harness.Publisher.EmptyCalls >= 1, "recovery after reset");
+        await WaitUntil(() => harness.Publisher.UnavailableCalls >= 1, "recovery after reset");
     }
 
     [Fact]
@@ -211,10 +216,10 @@ public class DiagnosticSchedulerTests
         await FailAsync(harness, reopened, 3);
         await FailAsync(harness, reopened, 4);
 
-        Assert.Equal(0, harness.Publisher.EmptyCalls);
+        Assert.Equal(0, harness.Publisher.UnavailableCalls);
 
         await FailAsync(harness, reopened, 5);
-        await WaitUntil(() => harness.Publisher.EmptyCalls >= 1, "recovery after reopen");
+        await WaitUntil(() => harness.Publisher.UnavailableCalls >= 1, "recovery after reopen");
     }
 
     [Fact]
@@ -259,6 +264,7 @@ public class DiagnosticSchedulerTests
         await WaitUntil(() => harness.Publisher.Publishes.Count >= 1, "recovered publish");
 
         Assert.Equal(0, harness.Publisher.EmptyCalls);
+        Assert.Equal(0, harness.Publisher.UnavailableCalls);
     }
 
     [Fact]
@@ -355,10 +361,10 @@ public class DiagnosticSchedulerTests
         await FailAsync(harness, project, 4);
         await FailAsync(harness, project, 5);
 
-        Assert.Equal(0, harness.Publisher.EmptyCalls);
+        Assert.Equal(0, harness.Publisher.UnavailableCalls);
 
         await FailAsync(harness, project, 6);
-        await WaitUntil(() => harness.Publisher.EmptyCalls >= 1, "recovery after reset");
+        await WaitUntil(() => harness.Publisher.UnavailableCalls >= 1, "recovery after reset");
     }
 
     private static async Task FailAsync(Harness harness, BackendProject project, int expectedCalls)
@@ -560,6 +566,8 @@ public class DiagnosticSchedulerTests
 
         public List<DocumentUri> Empties { get; } = [];
 
+        public List<DocumentUri> Unavailables { get; } = [];
+
         public TaskCompletionSource? PublishEntered { get; set; }
 
         public TaskCompletionSource? PublishRelease { get; set; }
@@ -571,6 +579,17 @@ public class DiagnosticSchedulerTests
                 lock (_lock)
                 {
                     return Empties.Count;
+                }
+            }
+        }
+
+        public int UnavailableCalls
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return Unavailables.Count;
                 }
             }
         }
@@ -601,6 +620,17 @@ public class DiagnosticSchedulerTests
             lock (_lock)
             {
                 Empties.Add(uri);
+            }
+        }
+
+        public void PublishUnavailable(IReadOnlyList<DiagnosticPublishTarget> targets)
+        {
+            lock (_lock)
+            {
+                foreach (DiagnosticPublishTarget target in targets)
+                {
+                    Unavailables.Add(target.Uri);
+                }
             }
         }
     }

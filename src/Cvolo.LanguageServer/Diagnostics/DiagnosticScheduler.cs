@@ -19,6 +19,7 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
     private static readonly TimeSpan EditQuietPeriod = TimeSpan.FromMilliseconds(350);
 
     private readonly ConcurrentDictionary<BackendProject, ProjectWorker> _workers = new();
+    private readonly ConcurrentDictionary<BackendProject, bool> _unavailable = new();
     private volatile bool _stopped;
 
     public void Schedule(BackendProject project)
@@ -30,8 +31,16 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
         worker.Request();
     }
 
+    /// <summary>
+    /// True when the most recent analyses for this project failed repeatedly and
+    /// diagnostics are currently unavailable. Host consumers can distinguish this
+    /// explicit state from a successful run that legitimately produced no diagnostics.
+    /// </summary>
+    public bool IsUnavailable(BackendProject project) => _unavailable.ContainsKey(project);
+
     public void OnProjectDrained(BackendProject project)
     {
+        _unavailable.TryRemove(project, out _);
         if (_workers.TryRemove(project, out ProjectWorker? worker))
             worker.Stop();
     }
@@ -72,6 +81,8 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
 
         // Successful computation resets failures even when it was superseded.
         worker.ResetFailures();
+        if (_unavailable.TryRemove(project, out _))
+            logger.Info($"[diag] diagnostics available again for project '{project}' after a successful analysis.");
         if (_stopped || worker.IsStopped)
             return;
 
@@ -100,13 +111,14 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
         if (failures < FailureRecoveryThreshold || context is null || _stopped || worker.IsStopped)
             return;
 
-        logger.Warning($"Diagnostic analysis failed {failures} times consecutively for project '{project}'; clearing published diagnostics.");
+        _unavailable[project] = true;
+        logger.Warning($"Diagnostic analysis failed {failures} times consecutively for project '{project}'; publishing an explicit unavailable state instead of a clean result.");
         try
         {
             store.TryCommitDiagnostics(context, eligible =>
             {
                 if (!_stopped && !worker.IsStopped)
-                    publisher.PublishEmpty(eligible);
+                    publisher.PublishUnavailable(eligible);
             });
         }
         catch (Exception publishEx)
