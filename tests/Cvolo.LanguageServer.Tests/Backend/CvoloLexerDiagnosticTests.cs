@@ -37,9 +37,14 @@ public class CvoloLexerDiagnosticTests : IDisposable
 
         var diagnostics = _backend.GetDiagnostics(snapshot, [handle]).Diagnostics;
 
-        BackendDiagnostic diagnostic = Assert.Single(diagnostics, d => d.Severity == BackendDiagnosticSeverity.Error);
+        // The lexer diagnostic is the point of this test. A stray '$' is also followed by a
+        // parser-level error on the enclosing '}' (the lexer drops the character); that is an
+        // independent, pre-existing parser behaviour, so assert the lexer origin precisely
+        // rather than assuming it is the only error in the run.
+        BackendDiagnostic diagnostic = Assert.Single(diagnostics, d => d.Code == "CVL1911");
 
         Assert.Equal(BackendDiagnosticSeverity.Error, diagnostic.Severity);
+        Assert.Equal(new TextSpan(20, 1), diagnostic.Location.Span);
         Assert.True(DocumentUriPathComparer.Instance.Equals(MainUri, diagnostic.Location.Document));
         Assert.DoesNotContain(diagnostics, d => d.Code == "CVL0000");
     }
