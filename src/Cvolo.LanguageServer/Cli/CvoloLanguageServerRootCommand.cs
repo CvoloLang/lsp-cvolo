@@ -23,6 +23,11 @@ internal sealed class CvoloLanguageServerRootCommand : RootCommand
         Description = "Write diagnostics to the given file path. Logging is off by default.",
     };
 
+    private readonly Option<string?> _diagnosticLogDirOption = new("--diagnostic-log-dir")
+    {
+        Description = "Directory in which to write a session incident log after the first internal error. No file is written for a clean session.",
+    };
+
     private readonly Option<bool> _verboseOption = new("--verbose")
     {
         Description = "Enable verbose logging, including raw JSON-RPC payloads.",
@@ -44,6 +49,7 @@ internal sealed class CvoloLanguageServerRootCommand : RootCommand
 
         Add(_stdioOption);
         Add(_logOption);
+        Add(_diagnosticLogDirOption);
         Add(_verboseOption);
         Add(_versionOption);
         Add(_jsonOption);
@@ -82,7 +88,8 @@ internal sealed class CvoloLanguageServerRootCommand : RootCommand
 
             var verbose = parseResult.GetValue(_verboseOption);
             var logPath = parseResult.GetValue(_logOption);
-            return await ServerPipeline.RunAsync(logPath, verbose).ConfigureAwait(false);
+            var diagnosticLogDir = parseResult.GetValue(_diagnosticLogDirOption);
+            return await ServerPipeline.RunAsync(logPath, verbose, diagnosticLogDir).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

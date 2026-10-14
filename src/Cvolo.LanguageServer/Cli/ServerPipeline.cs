@@ -19,9 +19,9 @@ namespace Cvolo.LanguageServer.Cli;
 /// </summary>
 internal static class ServerPipeline
 {
-    public static async Task<int> RunAsync(string? logPath, bool verbose)
+    public static async Task<int> RunAsync(string? logPath, bool verbose, string? diagnosticLogDirectory = null)
     {
-        using LspLogger logger = new(verbose, logPath);
+        using LspLogger logger = new(verbose, logPath, diagnosticLogDirectory);
 
         Console.Error.WriteLine($"{ServerMetadata.ServerName} {ServerMetadata.ServerVersion}");
         Console.Error.WriteLine($"tooling {ServerMetadata.ToolingVersion}");
