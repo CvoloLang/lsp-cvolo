@@ -54,7 +54,7 @@ internal sealed class CodeLensHandler(
             return null;
         }
 
-        logger.Warning($"[codeLens] capture uri='{documentUri}', version={context.Document.Version}, textLength={context.Document.Text.Length}.");
+        logger.Debug($"[codeLens] capture uri='{documentUri}', version={context.Document.Version}, textLength={context.Document.Text.Length}.");
 
         BackendCodeLensOptions options = settingsAccessor().CodeLens;
         BackendOffsetFormat offsetFormat = settingsAccessor().Layout.OffsetFormat;
@@ -65,7 +65,7 @@ internal sealed class CodeLensHandler(
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            logger.Warning($"[codeLens] request cancelled during compute for '{documentUri}', version={context.Document.Version}.");
+            logger.Debug($"[codeLens] request cancelled during compute for '{documentUri}', version={context.Document.Version}.");
             throw;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -76,13 +76,13 @@ internal sealed class CodeLensHandler(
 
         if (cancellationToken.IsCancellationRequested)
         {
-            logger.Warning($"[codeLens] request cancelled after compute for '{documentUri}', version={context.Document.Version}; lenses={lenses.Count} computed then dropped.");
+            logger.Debug($"[codeLens] request cancelled after compute for '{documentUri}', version={context.Document.Version}; lenses={lenses.Count} computed then dropped.");
             cancellationToken.ThrowIfCancellationRequested();
         }
 
         if (!Store.IsCurrent(context))
         {
-            logger.Warning($"[codeLens] discarded stale result for '{documentUri}', version={context.Document.Version}.");
+            logger.Debug($"[codeLens] discarded stale result for '{documentUri}', version={context.Document.Version}.");
             return null;
         }
 
@@ -109,7 +109,7 @@ internal sealed class CodeLensHandler(
             }
         }
 
-        logger.Warning($"[codeLens] response uri='{documentUri}', version={context.Document.Version}, lenses={lenses.Count}, mapped={mapped.Count}.");
+        logger.Debug($"[codeLens] response uri='{documentUri}', version={context.Document.Version}, lenses={lenses.Count}, mapped={mapped.Count}.");
 
         return [.. mapped];
     }

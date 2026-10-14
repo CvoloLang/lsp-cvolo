@@ -343,8 +343,8 @@ internal sealed class LanguageServer(
 
         _state.MarkInitializeReceived(initializeParams);
         logger.Info($"Semantic tokens: enabled={_state.SemanticTokensEnabled}, refresh={_state.RefreshSupported}, tokenTypes={_state.SemanticTokenTypes.Length}, tokenModifiers={_state.SemanticTokenModifiers.Length}.");
-        logger.Warning($"[perf] semantic tokens legend: types=[{string.Join(",", _state.SemanticTokenTypes)}], modifiers=[{string.Join(",", _state.SemanticTokenModifiers)}].");
-        logger.Warning($"[perf] editor intelligence: codeLensRefresh={_state.CodeLensRefreshSupported}, inlayHintRefresh={_state.InlayHintRefreshSupported}.");
+        logger.Debug($"[perf] semantic tokens legend: types=[{string.Join(",", _state.SemanticTokenTypes)}], modifiers=[{string.Join(",", _state.SemanticTokenModifiers)}].");
+        logger.Debug($"[perf] editor intelligence: codeLensRefresh={_state.CodeLensRefreshSupported}, inlayHintRefresh={_state.InlayHintRefreshSupported}.");
         logger.Info($"Anchored lenses: supported={_state.AnchoredLensSupported}.");
         _diagnostics.SetRelatedInformationSupported(
             initializeParams.Capabilities?.TextDocument?.PublishDiagnostics?.RelatedInformation == true);

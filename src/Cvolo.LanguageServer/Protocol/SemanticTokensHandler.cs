@@ -58,7 +58,7 @@ internal sealed class SemanticTokensHandler(
         {
             // An oversized document is a resource denial, not proof that a nonempty document has
             // zero semantic tokens: return a typed non-success, never a successful empty array.
-            logger.Warning($"[perf] semanticTokens refused for large document: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={maxInteractiveTextLength}");
+            logger.Info($"[perf] semanticTokens refused for large document: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={maxInteractiveTextLength}");
             throw TypedError(
                 "Semantic tokens are unavailable for this document because it exceeds the interactive resource budget.",
                 CvoloErrorData.BackendUnavailable,
@@ -121,7 +121,7 @@ internal sealed class SemanticTokensHandler(
     private readonly Dictionary<DocumentUri, DocumentVersion> _lastTokenBreakdownVersion = new();
 
     /// <summary>
-    /// Emits one warning per document version summarizing which semantic token kinds the
+    /// Emits one debug line per document version summarizing which semantic token kinds the
     /// compiler produced, so a missing colour can be traced to the emitted kinds rather than
     /// guessed at. The version gate keeps it to a single line per edit, not per request.
     /// </summary>
@@ -145,13 +145,13 @@ internal sealed class SemanticTokensHandler(
         }
 
         var summary = string.Join(", ", counts.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}={pair.Value}"));
-        logger.Warning($"[perf] semantic tokens breakdown: uri='{uri}', version={version}, total={result.Tokens.Count} [{summary}]");
+        logger.Debug($"[perf] semantic tokens breakdown: uri='{uri}', version={version}, total={result.Tokens.Count} [{summary}]");
     }
 
     private void LogTiming(string phase, Stopwatch stopwatch, DocumentUri uri, int thresholdMs = 50)
     {
         if (stopwatch.ElapsedMilliseconds >= thresholdMs)
-            logger.Warning($"[perf] semanticTokens {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
+            logger.Debug($"[perf] semanticTokens {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
         else
             logger.Debug($"[perf] semanticTokens {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
     }

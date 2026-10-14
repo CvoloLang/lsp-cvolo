@@ -239,7 +239,7 @@ internal sealed class TextDocumentSyncHandler(
     private void LogTiming(string phase, Stopwatch stopwatch, DocumentUri uri, int thresholdMs = 50)
     {
         if (stopwatch.ElapsedMilliseconds >= thresholdMs)
-            logger.Warning($"[perf] sync {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
+            logger.Debug($"[perf] sync {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
         else
             logger.Debug($"[perf] sync {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
     }
