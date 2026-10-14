@@ -281,6 +281,8 @@ internal sealed class SemanticTokensHandler(
             bits |= BitFor(legend, "static");
         if (modifiers.HasFlag(BackendSemanticTokenModifiers.Constant))
             bits |= BitFor(legend, "cvoloConstant");
+        if (modifiers.HasFlag(BackendSemanticTokenModifiers.ExternFunction))
+            bits |= BitFor(legend, "cvoloExternFunction");
         return bits;
     }
 

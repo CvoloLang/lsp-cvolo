@@ -121,6 +121,9 @@ internal enum BackendSemanticTokenModifiers
 
     /// <summary>Compiler-proven compile-time constant (immutable global); see INC 3.1 CONST.</summary>
     Constant = 1 << 3,
+
+    /// <summary>Imported extern function declaration (no Cvolo body); see INC 3.1 EXT.</summary>
+    ExternFunction = 1 << 4,
 }
 
 /// <summary>

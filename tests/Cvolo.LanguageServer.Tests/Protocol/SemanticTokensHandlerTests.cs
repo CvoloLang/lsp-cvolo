@@ -198,6 +198,38 @@ public class SemanticTokensHandlerTests : IDisposable
         Assert.Contains(tokens, t => t.Line == 1 && t.Character == 20 && t.Length == 4);
     }
 
+    [Fact]
+    public async Task Full_ExternModifier_IsEmittedWhenAdvertised()
+    {
+        await InitializeAsync(Capabilities(modifiers: ["declaration", "readonly", "static", "cvoloConstant", "cvoloExternFunction"]));
+        await OpenAsync("extern int abs(int x);\nint main() { return abs(-1); }\n");
+
+        JObject? result = await _session.Client.SemanticTokensAsync(_workspace.DocumentUri("main.cvl")).WithTimeout("semanticTokens");
+
+        Assert.NotNull(result);
+        var tokens = Decode(result!["data"]!.Values<int>().ToArray());
+
+        const int externBit = 1 << 4; // cvoloExternFunction position in the advertised legend.
+        Assert.Contains(tokens, t => t.Line == 0 && t.Character == 11 && t.Length == 3 && (t.Modifiers & externBit) == externBit);
+        Assert.Contains(tokens, t => t.Line == 1 && t.Character == 20 && t.Length == 3 && (t.Modifiers & externBit) == externBit);
+    }
+
+    [Fact]
+    public async Task Full_ExternModifier_IsNotEmittedWhenNotAdvertised()
+    {
+        await InitializeAsync(Capabilities());
+        await OpenAsync("extern int abs(int x);\nint main() { return abs(-1); }\n");
+
+        JObject? result = await _session.Client.SemanticTokensAsync(_workspace.DocumentUri("main.cvl")).WithTimeout("semanticTokens");
+
+        Assert.NotNull(result);
+        var tokens = Decode(result!["data"]!.Values<int>().ToArray());
+
+        // The client did not advertise any custom modifier, so no token may carry a bit beyond the three standard ones.
+        Assert.All(tokens, t => Assert.True((t.Modifiers & ~0b111) == 0));
+        Assert.Contains(tokens, t => t.Line == 1 && t.Character == 20 && t.Length == 3);
+    }
+
     private static List<(int Line, int Character, int Length, int Type, int Modifiers)> Decode(int[] data)
     {
         var tokens = new List<(int, int, int, int, int)>();
