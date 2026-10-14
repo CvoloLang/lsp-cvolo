@@ -36,7 +36,7 @@ public class SemanticTokensHandlerTests : IDisposable
         _workspace.Dispose();
     }
 
-    private static InitializeRequestParams Capabilities(bool semanticTokens = true, bool refresh = true, bool full = true, string[]? formats = null)
+    private static InitializeRequestParams Capabilities(bool semanticTokens = true, bool refresh = true, bool full = true, string[]? formats = null, string[]? modifiers = null)
     {
         return new InitializeRequestParams
         {
@@ -49,7 +49,7 @@ public class SemanticTokensHandlerTests : IDisposable
                         {
                             Requests = new SemanticTokensRequestsPayload { Full = full },
                             TokenTypes = CanonicalTypes,
-                            TokenModifiers = CanonicalModifiers,
+                            TokenModifiers = modifiers ?? CanonicalModifiers,
                             Formats = formats ?? ["relative"],
                             AugmentsSyntaxTokens = true,
                         }
@@ -164,6 +164,38 @@ public class SemanticTokensHandlerTests : IDisposable
         int functionType = Array.IndexOf(CanonicalTypes, "function");
         Assert.Contains(tokens, t => t.Line == 4 && t.Character == 20 && t.Length == 5 && t.Type == functionType);
         Assert.Contains(tokens, t => t.Line == 4 && t.Character == 12 && t.Length == 5); // local
+    }
+
+    [Fact]
+    public async Task Full_ConstantModifier_IsEmittedWhenAdvertised()
+    {
+        await InitializeAsync(Capabilities(modifiers: ["declaration", "readonly", "static", "cvoloConstant"]));
+        await OpenAsync("global int Seed = 1;\nint main() { return Seed; }\n");
+
+        JObject? result = await _session.Client.SemanticTokensAsync(_workspace.DocumentUri("main.cvl")).WithTimeout("semanticTokens");
+
+        Assert.NotNull(result);
+        var tokens = Decode(result!["data"]!.Values<int>().ToArray());
+
+        const int constantBit = 1 << 3; // cvoloConstant position in the advertised legend.
+        Assert.Contains(tokens, t => t.Line == 0 && t.Character == 11 && t.Length == 4 && (t.Modifiers & constantBit) == constantBit);
+        Assert.Contains(tokens, t => t.Line == 1 && t.Character == 20 && t.Length == 4 && (t.Modifiers & constantBit) == constantBit);
+    }
+
+    [Fact]
+    public async Task Full_ConstantModifier_IsNotEmittedWhenNotAdvertised()
+    {
+        await InitializeAsync(Capabilities());
+        await OpenAsync("global int Seed = 1;\nint main() { return Seed; }\n");
+
+        JObject? result = await _session.Client.SemanticTokensAsync(_workspace.DocumentUri("main.cvl")).WithTimeout("semanticTokens");
+
+        Assert.NotNull(result);
+        var tokens = Decode(result!["data"]!.Values<int>().ToArray());
+
+        // The client did not advertise cvoloConstant, so no token may carry any bit beyond the three standard modifiers.
+        Assert.All(tokens, t => Assert.True((t.Modifiers & ~0b111) == 0));
+        Assert.Contains(tokens, t => t.Line == 1 && t.Character == 20 && t.Length == 4);
     }
 
     private static List<(int Line, int Character, int Length, int Type, int Modifiers)> Decode(int[] data)

@@ -216,7 +216,7 @@ internal sealed class SessionState
         "keyword",
     ];
 
-    private static readonly string[] CanonicalTokenModifiers = ["declaration", "readonly", "static"];
+    private static readonly string[] CanonicalTokenModifiers = ["declaration", "readonly", "static", "cvoloConstant"];
 
     /// <summary>
     /// Whether full semantic tokens are enabled for the session (all compatibility gates passed

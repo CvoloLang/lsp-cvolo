@@ -1096,6 +1096,8 @@ internal sealed partial class CvoloLanguageBackend(
             result |= BackendSemanticTokenModifiers.Readonly;
         if (modifiers.HasFlag(SemanticTokenModifiers.Static))
             result |= BackendSemanticTokenModifiers.Static;
+        if (modifiers.HasFlag(SemanticTokenModifiers.Constant))
+            result |= BackendSemanticTokenModifiers.Constant;
         return result;
     }
 

@@ -118,6 +118,9 @@ internal enum BackendSemanticTokenModifiers
     Declaration = 1 << 0,
     Readonly = 1 << 1,
     Static = 1 << 2,
+
+    /// <summary>Compiler-proven compile-time constant (immutable global); see INC 3.1 CONST.</summary>
+    Constant = 1 << 3,
 }
 
 /// <summary>
