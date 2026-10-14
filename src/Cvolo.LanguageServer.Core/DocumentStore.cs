@@ -34,7 +34,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     private void LogTiming(string operation, Stopwatch stopwatch, string detail, int thresholdMs = 50)
     {
         if (stopwatch.ElapsedMilliseconds >= thresholdMs)
-            _logger.Write(CoreLogLevel.Warning, $"[perf] {operation} took {stopwatch.ElapsedMilliseconds} ms: {detail}");
+            _logger.Write(CoreLogLevel.Info, $"[perf] {operation} took {stopwatch.ElapsedMilliseconds} ms: {detail}");
         else
             _logger.Write(CoreLogLevel.Debug, $"[perf] {operation} took {stopwatch.ElapsedMilliseconds} ms: {detail}");
     }
