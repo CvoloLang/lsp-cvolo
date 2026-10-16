@@ -246,6 +246,41 @@ internal sealed class TestClient : IDisposable
             PositionParams(uri, line, character));
     }
 
+    public Task<Location[]?> ReferencesAsync(Uri uri, int line, int character, bool includeDeclaration = false)
+    {
+        return _rpc.InvokeWithParameterObjectAsync<Location[]?>(
+            "textDocument/references",
+            new ReferenceParamsPayload
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = uri },
+                Position = new Position { Line = line, Character = character },
+                Context = new ReferenceContextPayload { IncludeDeclaration = includeDeclaration },
+            });
+    }
+
+    public Task<PrepareRenameResultPayload?> PrepareRenameAsync(Uri uri, int line, int character)
+    {
+        return _rpc.InvokeWithParameterObjectAsync<PrepareRenameResultPayload?>(
+            "textDocument/prepareRename",
+            new PrepareRenameParamsPayload
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = uri },
+                Position = new Position { Line = line, Character = character },
+            });
+    }
+
+    public Task<WorkspaceEditPayload> RenameAsync(Uri uri, int line, int character, string newName)
+    {
+        return _rpc.InvokeWithParameterObjectAsync<WorkspaceEditPayload>(
+            "textDocument/rename",
+            new RenameParamsPayload
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = uri },
+                Position = new Position { Line = line, Character = character },
+                NewName = newName,
+            });
+    }
+
     public Task<JArray?> PrepareTypeHierarchyAsync(Uri uri, int line, int character)
     {
         return _rpc.InvokeWithParameterObjectAsync<JArray?>(

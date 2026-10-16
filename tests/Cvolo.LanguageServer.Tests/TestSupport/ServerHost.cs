@@ -74,6 +74,8 @@ internal sealed class ServerHost : IDisposable
         AddTarget(rpc, server.TypeHierarchySubtypes);
         AddTarget(rpc, server.DocumentSymbols);
         AddTarget(rpc, server.SemanticTokens);
+        AddTarget(rpc, server.References);
+        AddTarget(rpc, server.Rename);
         AddTarget(rpc, server.SignatureHelp);
         AddTarget(rpc, server.CodeActions);
         AddTarget(rpc, server.CodeLenses);
