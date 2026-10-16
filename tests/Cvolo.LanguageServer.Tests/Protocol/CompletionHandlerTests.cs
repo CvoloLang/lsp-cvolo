@@ -230,4 +230,53 @@ public class CompletionHandlerTests : IDisposable
         CompletionList? result = await CompleteAsync(source);
         Assert.True(Has(result, "return", CompletionItemKind.Keyword));
     }
+
+    [Fact]
+    public async Task AggregateInitializer_OffersFields_AndNotGlobals()
+    {
+        await InitializeAsync();
+        const string source =
+            "struct Window { void* glfwWindow; int Width; }\n" +
+            "int getchar(int c) { return c; }\n" +
+            "int main() {\n    Window w = Window { g| };\n    return 0;\n}\n";
+        await OpenAsync(source);
+
+        CompletionList? result = await CompleteAsync(source);
+
+        Assert.NotNull(result);
+        Assert.True(Has(result, "glfwWindow", CompletionItemKind.Field));
+        Assert.DoesNotContain(result!.Items, item => item.Label == "getchar");
+    }
+
+    [Fact]
+    public async Task AggregateInitializer_InsertionAppendsAssignment()
+    {
+        await InitializeAsync();
+        const string source =
+            "struct Window { void* glfwWindow; int Width; }\n" +
+            "int main() {\n    Window w = Window { g| };\n    return 0;\n}\n";
+        await OpenAsync(source);
+
+        CompletionList? result = await CompleteAsync(source);
+
+        Assert.NotNull(result);
+        CompletionItem field = result!.Items.First(item => item.Label == "glfwWindow");
+        Assert.Equal("glfwWindow = ", field.TextEdit!.NewText);
+    }
+
+    [Fact]
+    public async Task DeclarationName_DoesNotOfferFunctionsOrGlobals()
+    {
+        await InitializeAsync();
+        const string source =
+            "struct Window { int Width; }\n" +
+            "int getchar(int c) { return c; }\n" +
+            "int main() {\n    Window win|;\n    return 0;\n}\n";
+        await OpenAsync(source);
+
+        CompletionList? result = await CompleteAsync(source);
+
+        Assert.True(result is null || result.Items.All(item =>
+            item.Kind is not (CompletionItemKind.Function or CompletionItemKind.Method)));
+    }
 }
