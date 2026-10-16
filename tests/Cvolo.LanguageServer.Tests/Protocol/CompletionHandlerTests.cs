@@ -70,6 +70,34 @@ public class CompletionHandlerTests : IDisposable
             "An explicit completion request in a large document must still offer the aggregate's fields.");
     }
 
+    [Fact]
+    public async Task DeclarationPosition_OffersBuiltInTypeNames()
+    {
+        await InitializeAsync();
+        const string source = "int main()\n{\n    i|\n}\n";
+        await OpenAsync(source);
+
+        CompletionList? result = await CompleteAsync(source);
+
+        Assert.NotNull(result);
+        Assert.Contains(result!.Items, item => item.Label == "int");
+        Assert.Contains(result.Items, item => item.Label == "if");
+    }
+
+    [Fact]
+    public async Task GenericArgument_OffersTypeNames_WithoutStatementKeywords()
+    {
+        await InitializeAsync();
+        const string source = "int main()\n{\n    Option<i|\n}\n";
+        await OpenAsync(source);
+
+        CompletionList? result = await CompleteAsync(source);
+
+        Assert.NotNull(result);
+        Assert.Contains(result!.Items, item => item.Label == "int");
+        Assert.DoesNotContain(result.Items, item => item.Label == "if");
+    }
+
     private static bool Has(CompletionList? list, string label, CompletionItemKind kind)
     {
         return list is not null && list.Items.Any(item => item.Label == label && item.Kind == kind);
