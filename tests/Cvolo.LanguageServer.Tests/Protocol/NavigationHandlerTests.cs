@@ -120,6 +120,26 @@ public class NavigationHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task Hover_OnVarLocal_ShowsInferredType()
+    {
+        const string source =
+            "struct Window { public int Width; }\n" +
+            "int main() {\n" +
+            "    var window = Window { Width: 1 };\n" +
+            "    return window.Width;\n" +
+            "}\n";
+
+        await InitializeAsync();
+        await OpenMainAsync(source);
+
+        var (line, character) = Position(source, "window.Width");
+        Hover? hover = await _session.Client.HoverAsync(_workspace.DocumentUri("main.cvl"), line, character).WithTimeout("hover");
+
+        Assert.NotNull(hover);
+        Assert.Equal("Window window", ((MarkupContent)hover!.Contents.Value!).Value);
+    }
+
+    [Fact]
     public async Task Hover_MarkdownClient_UsesCvoloFence()
     {
         await InitializeAsync(hoverFormats: ["markdown", "plaintext"]);
