@@ -162,6 +162,74 @@ public class CodeActionProcessTests
         }
     }
 
+    [Fact]
+    public async Task CodeAction_OverStdio_MissingFieldFixInsertsDefault()
+    {
+        string fixtureSource = Path.Combine(FindRepoRoot(), "tests", "fixtures", "code-action-missing-field");
+        string workspace = Path.Combine(Path.GetTempPath(), "cvolo-ls-codeaction-missing-" + Guid.NewGuid().ToString("N"));
+        CopyDirectory(fixtureSource, workspace);
+
+        try
+        {
+            using var server = ServerProcess.Start("--stdio");
+            var folderUri = new Uri(workspace).AbsoluteUri;
+
+            string capabilities =
+                "{\"textDocument\":{" +
+                "\"codeAction\":{\"codeActionLiteralSupport\":{\"codeActionKind\":{\"valueSet\":[\"quickfix\"]}}," +
+                "\"dataSupport\":true,\"resolveSupport\":{\"properties\":[\"edit\"]}}}," +
+                "\"workspace\":{\"workspaceEdit\":{\"documentChanges\":true}}}";
+            server.SendJson(JsonRpcFrames.Request(1, "initialize",
+                $"{{\"processId\":{Environment.ProcessId},\"workspaceFolders\":[{{\"uri\":\"{folderUri}\",\"name\":\"w\"}}],\"capabilities\":{capabilities}}}"));
+            await server.WaitForResponseAsync(1).WithTimeout("initialize response");
+            server.SendJson(JsonRpcFrames.Notification("initialized", "{}"));
+
+            string mainPath = Path.Combine(workspace, "main.cvl");
+            string text = File.ReadAllText(mainPath);
+            string uri = new Uri(mainPath).AbsoluteUri;
+            server.SendJson(JsonRpcFrames.Notification("textDocument/didOpen",
+                $"{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"cvolo\",\"version\":1,\"text\":\"{Escape(text)}\"}}}}"));
+
+            const string initializer = "Window { Width = 1 }";
+            int start = text.IndexOf(initializer, StringComparison.Ordinal);
+            (int line, int character) = OffsetToPosition(text, start);
+            (int endLine, int endCharacter) = OffsetToPosition(text, start + initializer.Length);
+            server.SendJson(JsonRpcFrames.Request(2, "textDocument/codeAction",
+                $"{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"range\":{{\"start\":{{\"line\":{line},\"character\":{character}}}," +
+                $"\"end\":{{\"line\":{endLine},\"character\":{endCharacter}}}}},\"context\":{{\"diagnostics\":[]}}}}"));
+            JObject codeAction = await server.WaitForResponseAsync(2).WithTimeout("code action response");
+
+            var actions = codeAction["result"] as JArray;
+            Assert.NotNull(actions);
+            JToken action = Assert.Single(actions!);
+            Assert.Equal("quickfix", (string?)action["kind"]);
+            Assert.Equal("CVL4081", (string?)action["diagnostics"]?[0]?["code"]);
+            Assert.NotNull(action["data"]);
+
+            server.SendJson(JsonRpcFrames.Request(3, "codeAction/resolve", action.ToString(Formatting.None)));
+            JObject resolved = await server.WaitForResponseAsync(3).WithTimeout("code action resolve response");
+            string newText = (string?)resolved["result"]!["edit"]!["documentChanges"]?[0]?["edits"]?[0]?["newText"] ?? string.Empty;
+            Assert.Contains("Height = default(int)", newText, StringComparison.Ordinal);
+
+            server.SendJson(JsonRpcFrames.Request(4, "shutdown", "null"));
+            await server.WaitForResponseAsync(4).WithTimeout("shutdown response");
+            server.SendJson(JsonRpcFrames.Notification("exit", "null"));
+
+            int exitCode = await server.WaitForExitAsync().WithTimeout("server exit");
+            Assert.Equal(0, exitCode);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(workspace, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
     private static async Task<IReadOnlyList<PublishedDiagnostics>> WaitForPublishAsync(ServerProcess server, string uri, Func<IReadOnlyList<PublishedDiagnostics>, bool> predicate)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);

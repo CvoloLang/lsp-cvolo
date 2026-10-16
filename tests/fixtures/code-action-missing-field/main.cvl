@@ -1,0 +1,11 @@
+struct Window
+{
+    int Width;
+    int Height;
+}
+
+int main()
+{
+    Window w = Window { Width = 1 };
+    return 0;
+}
