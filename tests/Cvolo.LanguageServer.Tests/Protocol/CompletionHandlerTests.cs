@@ -47,6 +47,29 @@ public class CompletionHandlerTests : IDisposable
         return _session.Client.CompletionAsync(_workspace.DocumentUri("main.cvl"), line, character);
     }
 
+    [Fact]
+    public async Task ExplicitCompletion_InLargeDocument_StillOffersAggregateFields()
+    {
+        string padding = "// " + new string('x', 100_000) + "\n";
+        string marked = padding +
+            "struct Window { void* glfwWindow; int Width; }\n" +
+            "int main() { Window w = Window { | }; return 0; }\n";
+
+        await InitializeAsync();
+        await OpenAsync(marked);
+
+        CompletionList? automatic = await CompleteAsync(marked);
+        Assert.NotNull(automatic);
+        Assert.Empty(automatic!.Items);
+
+        (_, int line, int character) = SplitCursor(marked);
+        CompletionList? explicitList = await _session.Client
+            .CompletionAsync(_workspace.DocumentUri("main.cvl"), line, character, explicitInvocation: true)
+            .WithTimeout("completion");
+        Assert.True(Has(explicitList, "glfwWindow", CompletionItemKind.Field),
+            "An explicit completion request in a large document must still offer the aggregate's fields.");
+    }
+
     private static bool Has(CompletionList? list, string label, CompletionItemKind kind)
     {
         return list is not null && list.Items.Any(item => item.Label == label && item.Kind == kind);

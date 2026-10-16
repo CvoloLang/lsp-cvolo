@@ -132,6 +132,20 @@ internal sealed class TestClient : IDisposable
             });
     }
 
+    public Task<CompletionList?> CompletionAsync(Uri uri, int line, int character, bool explicitInvocation)
+    {
+        return _rpc.InvokeWithParameterObjectAsync<CompletionList?>(
+            Methods.TextDocumentCompletionName,
+            new CompletionParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = uri },
+                Position = new Position { Line = line, Character = character },
+                Context = explicitInvocation
+                    ? new CompletionContext { TriggerKind = CompletionTriggerKind.Invoked }
+                    : null,
+            });
+    }
+
     public Task<CompletionList?> CompletionWithTokenAsync(Uri uri, int line, int character, CancellationToken cancellationToken)
     {
         return _rpc.InvokeWithParameterObjectAsync<CompletionList?>(
