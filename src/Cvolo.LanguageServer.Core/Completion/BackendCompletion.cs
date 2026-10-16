@@ -102,7 +102,8 @@ internal sealed record BackendCompletionItem(
     string? Detail,
     BackendCompletionInsertionPlan? InsertionPlan,
     BackendCompletionResolveHandle? ResolveHandle,
-    BackendCompletionResolvableFields ResolvableFields);
+    BackendCompletionResolvableFields ResolvableFields,
+    string? FilterText = null);
 
 /// <summary>The lazily-resolved fields of one completion item.</summary>
 internal sealed record BackendCompletionResolvedInfo(string? Detail, string? Documentation);

@@ -694,7 +694,8 @@ internal sealed partial class CvoloLanguageBackend(
                 candidate.Detail,
                 MapInsertionPlan(candidate.InsertionPlan),
                 candidate.ItemId is { } itemId ? new CvoloCompletionResolveHandle(toolingSnapshot, itemId) : null,
-                MapResolvableFields(candidate.ResolvableFields)));
+                MapResolvableFields(candidate.ResolvableFields),
+                candidate.FilterText));
         }
 
         return new BackendCompletionResult(

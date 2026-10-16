@@ -291,6 +291,7 @@ internal sealed class CompletionHandler(
                 Label = item.Label,
                 Kind = MapKind(item.Kind),
                 Detail = item.Detail,
+                FilterText = item.FilterText,
                 InsertTextFormat = insertFormat,
                 TextEdit = new TextEdit
                 {

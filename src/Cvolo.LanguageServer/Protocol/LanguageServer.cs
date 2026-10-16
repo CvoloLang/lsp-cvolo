@@ -363,7 +363,11 @@ internal sealed class LanguageServer(
                 CompletionProvider = new CompletionOptions
                 {
                     ResolveProvider = true,
-                    TriggerCharacters = [".", "~"],
+                    // `.`/`~` are the original member/destructor triggers. `{` and `,` are added so a
+                    // struct initializer surfaces its fields as the user types (`Window {`, after a
+                    // completed field). Field completion still only activates inside a recognized
+                    // aggregate literal; unrelated braces/commas return the ordinary expression list.
+                    TriggerCharacters = [".", "~", "{", ","],
                 },
                 SignatureHelpProvider = new SignatureHelpOptions
                 {

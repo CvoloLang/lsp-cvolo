@@ -302,4 +302,46 @@ public class CompletionHandlerTests : IDisposable
         Assert.True(result is null || result.Items.All(item =>
             item.Kind is not (CompletionItemKind.Function or CompletionItemKind.Method)));
     }
+
+    [Fact]
+    public async Task UnmatchedInitializerPrefix_ReturnsEveryRemainingFieldWithFilterText()
+    {
+        await InitializeAsync();
+        const string source =
+            "struct Window { void* glfwWindow; int Width; }\n" +
+            "int getchar(int c) { return c; }\n" +
+            "int main() { Window w = Window { s| }; return 0; }\n";
+        await OpenAsync(source);
+
+        CompletionList? result = await CompleteAsync(source);
+
+        Assert.NotNull(result);
+        Assert.True(Has(result, "glfwWindow", CompletionItemKind.Field),
+            "An unmatched prefix must fall back to the aggregate's remaining fields.");
+        Assert.True(Has(result, "Width", CompletionItemKind.Field));
+        Assert.DoesNotContain(result!.Items, item => item.Label == "getchar");
+
+        // A filtering client must still be able to show these: the filter text carries the typed
+        // prefix so the item matches the client's own word query.
+        CompletionItem field = result.Items.First(item => item.Label == "glfwWindow");
+        Assert.Equal("sglfwWindow", field.FilterText);
+        Assert.Equal(1, field.TextEdit!.Range.End.Character - field.TextEdit.Range.Start.Character);
+    }
+
+    [Fact]
+    public async Task MatchingInitializerPrefix_ReturnsOnlyMatchingFieldsWithoutFilterOverride()
+    {
+        await InitializeAsync();
+        const string source =
+            "struct Window { void* glfwWindow; int Width; }\n" +
+            "int main() { Window w = Window { W| }; return 0; }\n";
+        await OpenAsync(source);
+
+        CompletionList? result = await CompleteAsync(source);
+
+        Assert.NotNull(result);
+        Assert.True(Has(result, "Width", CompletionItemKind.Field));
+        Assert.DoesNotContain(result!.Items, item => item.Label == "glfwWindow");
+        Assert.All(result.Items.Where(item => item.Kind == CompletionItemKind.Field), item => Assert.Null(item.FilterText));
+    }
 }

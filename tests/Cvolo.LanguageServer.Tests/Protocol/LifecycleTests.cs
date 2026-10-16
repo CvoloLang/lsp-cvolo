@@ -34,6 +34,8 @@ public class LifecycleTests
         Assert.True(completion["resolveProvider"]!.Value<bool>());
         Assert.Contains(".", completion["triggerCharacters"]!.Values<string>());
         Assert.Contains("~", completion["triggerCharacters"]!.Values<string>());
+        Assert.Contains("{", completion["triggerCharacters"]!.Values<string>());
+        Assert.Contains(",", completion["triggerCharacters"]!.Values<string>());
 
         var signatureHelp = (JObject)capabilities["signatureHelpProvider"]!;
         Assert.Contains("(", signatureHelp["triggerCharacters"]!.Values<string>());
