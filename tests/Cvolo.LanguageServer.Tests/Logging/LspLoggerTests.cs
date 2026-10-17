@@ -97,6 +97,23 @@ public sealed class LspLoggerTests : IDisposable
     }
 
     [Fact]
+    public void StructuredDebugLog_IsReadableBeforeTheSessionEnds()
+    {
+        Directory.CreateDirectory(_dir);
+        var file = Path.Combine(_dir, "debug.log");
+        using (var logger = new LspLogger(verbose: false, logFilePath: file, diagnosticLogDirectory: _dir))
+        {
+            Assert.Null(logger.RawSink);
+            logger.Debug("[signatureHelp] compiler returned null");
+            logger.Info("[provenance] tooling=0.0.21.1");
+            var content = ReadAll(file);
+            Assert.Contains("compiler returned null", content);
+            Assert.Contains("tooling=0.0.21.1", content);
+            Assert.Null(logger.DiagnosticLogPath);
+        }
+    }
+
+    [Fact]
     public void ExplicitLogFile_StaysContinuousAndCreatesNoIncidentFile()
     {
         string explicitLog = Path.Combine(_dir, "explicit.log");
