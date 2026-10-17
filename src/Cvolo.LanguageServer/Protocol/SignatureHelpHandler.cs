@@ -4,6 +4,7 @@ using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
 using StreamJsonRpc;
+using System.Diagnostics;
 
 namespace Cvolo.LanguageServer.Protocol;
 
@@ -25,8 +26,12 @@ internal sealed class SignatureHelpHandler(
     [JsonRpcMethod("textDocument/signatureHelp", UseSingleObjectParameterDeserialization = true)]
     public async Task<SignatureHelpResponse?> SignatureHelp(SignatureHelpParams? parameters, CancellationToken cancellationToken)
     {
+        var timer = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } textDocument || parameters.Position is not { } position)
+        {
+            logger.Debug("[signatureHelp] missing document or position");
             return null;
+        }
 
         if (!TextDocumentSyncHandler.TryCreateDocumentUri(textDocument.Uri, out DocumentUri documentUri)
             || !TextDocumentSyncHandler.IsCvoloDocument(documentUri))
@@ -36,12 +41,16 @@ internal sealed class SignatureHelpHandler(
         await RequestBarrier.WaitAsync(Store, cancellationToken);
 
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
+        {
+            logger.Debug($"[signatureHelp] no captured snapshot uri='{documentUri}'");
             return null;
+        }
 
         var index = new LineIndex(context.Document.Text);
         if (!index.TryGetOffset(new TextPosition(position.Line, position.Character), out int offset))
             return null;
 
+        logger.Debug($"[signatureHelp] start uri='{documentUri}' v{context.Version} position={position.Line}:{position.Character} offset={offset}");
         BackendSignatureHelpResult? result;
         try
         {
@@ -49,15 +58,24 @@ internal sealed class SignatureHelpHandler(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[signatureHelp] backend failure for '{documentUri}': {ex}");
+            logger.Warning($"[signatureHelp] backend failure uri='{documentUri}' v{context.Version} offset={offset} elapsed={timer.ElapsedMilliseconds}ms: {ex}");
             return null;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (!Store.IsCurrent(context) || result is null)
+        if (!Store.IsCurrent(context))
+        {
+            logger.Debug($"[signatureHelp] stale snapshot uri='{documentUri}' v{context.Version} elapsed={timer.ElapsedMilliseconds}ms");
             return null;
-
-        return Map(result);
+        }
+        if (result is null)
+        {
+            logger.Debug($"[signatureHelp] compiler returned null uri='{documentUri}' v{context.Version} offset={offset} elapsed={timer.ElapsedMilliseconds}ms");
+            return null;
+        }
+        var mapped = Map(result);
+        logger.Debug($"[signatureHelp] end uri='{documentUri}' v{context.Version} status={(mapped is null ? "invalid" : "ok")} signatures={result.Signatures.Count} elapsed={timer.ElapsedMilliseconds}ms");
+        return mapped;
     }
 
     /// <summary>
