@@ -32,6 +32,57 @@ public class EditorIntelligenceProcessTests
     }
 
     [Fact]
+    public async Task Completion_OverStdio_OffersDoubleForTheDoPrefixAtStatementStart()
+    {
+        const string text =
+            "int main()\n" +
+            "{\n" +
+            "    do\n" +
+            "}\n";
+
+        await WithServerAsync(text, async (server, uri) =>
+        {
+            int offset = text.IndexOf("    do", StringComparison.Ordinal) + "    do".Length;
+            var items = await CompletionAtAsync(server, uri, text, offset, 2);
+            Assert.Contains(items, item => (string?)item["label"] == "double");
+        });
+    }
+
+    [Fact]
+    public async Task SemanticTokens_OverStdio_EmitsTheExternModifierForARealisticClient()
+    {
+        const string text =
+            "extern int getchar();\n" +
+            "int main()\n" +
+            "{\n" +
+            "    return getchar();\n" +
+            "}\n";
+
+        await WithServerAsync(text, RealisticClientCapabilities, async (server, uri, initialize) =>
+        {
+            var legend = initialize["result"]?["capabilities"]?["semanticTokensProvider"]?["legend"]?["tokenModifiers"] as JArray;
+            Assert.NotNull(legend);
+            var modifiers = legend!.Select(token => (string)token!).ToList();
+            int externBit = modifiers.IndexOf("cvoloExternFunction");
+            Assert.True(externBit >= 0, "advertised modifiers: " + string.Join(",", modifiers));
+
+            server.SendJson(JsonRpcFrames.Request(3, "textDocument/semanticTokens/full",
+                $"{{\"textDocument\":{{\"uri\":\"{uri}\"}}}}"));
+            JObject response = await server.WaitForResponseAsync(3).WithTimeout("semantic tokens response");
+            var data = response["result"]?["data"] as JArray;
+            Assert.NotNull(data);
+
+            var tokens = DecodeTokens(data!);
+            foreach ((int line, int start) in new[] { (0, 11), (3, 11) })
+            {
+                var token = Assert.Single(tokens, t => t.Line == line && t.Start == start && t.Length == 7);
+                Assert.True((token.Modifiers & (1 << externBit)) != 0,
+                    $"token at {line}:{start} did not carry cvoloExternFunction (modifiers={token.Modifiers})");
+            }
+        });
+    }
+
+    [Fact]
     public async Task InlayHint_OverStdio_DoesNotInventAnIntTypeForAnIncompleteExplicitDeclaration()
     {
         const string text =
@@ -61,7 +112,21 @@ public class EditorIntelligenceProcessTests
         });
     }
 
-    private static async Task WithServerAsync(string text, Func<ServerProcess, string, Task> body)
+    // The token capabilities a current VS Code release sends: the standard token types plus only the
+    // ten standard token modifiers. The custom presentation modifiers are deliberately absent, which is
+    // exactly the negotiation the server must still honour.
+    private const string RealisticClientCapabilities =
+        """
+        {"textDocument":{"semanticTokens":{"dynamicRegistration":false,"requests":{"range":true,"full":{"delta":true}},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":false,"serverCancelSupport":true,"augmentsSyntaxTokens":true}}}
+        """;
+
+    private static async Task WithServerAsync(string text, Func<ServerProcess, string, Task> body) =>
+        await WithServerAsync(text, capabilities: null, (server, uri, _) => body(server, uri));
+
+    private static async Task WithServerAsync(
+        string text,
+        string? capabilities,
+        Func<ServerProcess, string, JObject, Task> body)
     {
         string workspace = Path.Combine(Path.GetTempPath(), "cvolo-ls-editor-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workspace);
@@ -72,15 +137,16 @@ public class EditorIntelligenceProcessTests
         {
             using var server = ServerProcess.Start("--stdio");
             var folderUri = new Uri(workspace).AbsoluteUri;
-            server.SendJson(JsonRpcFrames.Request(1, "initialize", $"{{\"processId\":{Environment.ProcessId},\"workspaceFolders\":[{{\"uri\":\"{folderUri}\",\"name\":\"w\"}}]}}"));
-            await server.WaitForResponseAsync(1).WithTimeout("initialize response");
+            string capabilityJson = capabilities is null ? "" : $",\"capabilities\":{capabilities}";
+            server.SendJson(JsonRpcFrames.Request(1, "initialize", $"{{\"processId\":{Environment.ProcessId}{capabilityJson},\"workspaceFolders\":[{{\"uri\":\"{folderUri}\",\"name\":\"w\"}}]}}"));
+            JObject initialize = await server.WaitForResponseAsync(1).WithTimeout("initialize response");
             server.SendJson(JsonRpcFrames.Notification("initialized", "{}"));
 
             var uri = new Uri(mainPath).AbsoluteUri;
             server.SendJson(JsonRpcFrames.Notification("textDocument/didOpen",
                 $"{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"cvolo\",\"version\":1,\"text\":\"{Escape(text)}\"}}}}"));
 
-            await body(server, uri);
+            await body(server, uri, initialize);
 
             server.SendJson(JsonRpcFrames.Request(99, "shutdown", "null"));
             await server.WaitForResponseAsync(99).WithTimeout("shutdown response");
@@ -98,6 +164,25 @@ public class EditorIntelligenceProcessTests
             {
             }
         }
+    }
+
+    private static List<(int Line, int Start, int Length, int Modifiers)> DecodeTokens(JArray data)
+    {
+        var tokens = new List<(int Line, int Start, int Length, int Modifiers)>();
+        int line = 0;
+        int start = 0;
+        for (var i = 0; i + 4 < data.Count; i += 5)
+        {
+            int deltaLine = data[i]!.Value<int>();
+            int deltaStart = data[i + 1]!.Value<int>();
+            int length = data[i + 2]!.Value<int>();
+            int modifiers = data[i + 4]!.Value<int>();
+            line += deltaLine;
+            start = deltaLine == 0 ? start + deltaStart : deltaStart;
+            tokens.Add((line, start, length, modifiers));
+        }
+
+        return tokens;
     }
 
     private static async Task<List<JToken>> CompletionAtAsync(ServerProcess server, string uri, string text, int offset, int id)

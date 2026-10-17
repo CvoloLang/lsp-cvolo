@@ -243,7 +243,16 @@ internal sealed class SessionState
         SemanticTokenTypes = [.. CanonicalTokenTypes.Where(clientTypes.Contains)];
 
         var clientModifiers = semanticTokens?.TokenModifiers ?? [];
-        SemanticTokenModifiers = [.. CanonicalTokenModifiers.Where(clientModifiers.Contains)];
+        // Modifiers whose presentation the server itself defines are always part of the advertised
+        // legend. LSP clients register the server legend verbatim and render unknown modifiers through
+        // theme rules (e.g. `function:cvoloExternFunction`), so filtering them by the client's advisory
+        // modifier list would silently drop the distinct presentation. Clients that cannot render them
+        // fall back to the plain token type, which stays truthful.
+        SemanticTokenModifiers =
+        [
+            .. CanonicalTokenModifiers.Where(modifier =>
+                IsServerPresentationModifier(modifier) || clientModifiers.Contains(modifier)),
+        ];
 
         var fullRequested = IsFullRequested(semanticTokens?.Requests?.Full);
         var relativeFormat = semanticTokens?.Formats?.Contains("relative", StringComparer.Ordinal) == true;
@@ -259,6 +268,14 @@ internal sealed class SessionState
         bool value => value,
         _ => true,
     };
+
+    /// <summary>
+    /// Whether a modifier is part of the server's own presentation vocabulary. These are advertised
+    /// unconditionally in the negotiated legend (bits are only ever produced for modifiers present in
+    /// that legend); the client's capability list is advisory for the standard LSP modifiers.
+    /// </summary>
+    private static bool IsServerPresentationModifier(string modifier) =>
+        modifier is "cvoloConstant" or "cvoloExternFunction";
 
     /// <summary>
     /// Whether hover content should be returned as markdown. Prefers markdown

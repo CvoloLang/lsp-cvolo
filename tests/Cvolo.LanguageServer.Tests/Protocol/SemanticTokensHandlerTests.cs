@@ -21,6 +21,13 @@ public class SemanticTokensHandlerTests : IDisposable
 
     private static readonly string[] CanonicalModifiers = ["declaration", "readonly", "static"];
 
+    /// <summary>
+    /// Modifiers the server advertises in the negotiated legend: the standard ones the client
+    /// declared plus the server's own presentation modifiers, which clients register verbatim.
+    /// </summary>
+    private static readonly string[] AdvertisedModifiers =
+        ["declaration", "readonly", "static", "cvoloConstant", "cvoloExternFunction"];
+
     private readonly TestWorkspace _workspace;
     private readonly ProtocolSession _session;
 
@@ -87,7 +94,7 @@ public class SemanticTokensHandlerTests : IDisposable
         Assert.True(provider!.Full);
         Assert.False(provider.Range);
         Assert.Equal(CanonicalTypes, provider.Legend!.TokenTypes);
-        Assert.Equal(CanonicalModifiers, provider.Legend.TokenModifiers);
+        Assert.Equal(AdvertisedModifiers, provider.Legend.TokenModifiers);
     }
 
     [Fact]
@@ -183,8 +190,10 @@ public class SemanticTokensHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task Full_ConstantModifier_IsNotEmittedWhenNotAdvertised()
+    public async Task Full_ConstantModifier_IsEmittedForAStandardOnlyClient()
     {
+        // The real VS Code client advertises only the standard modifiers but registers the server
+        // legend verbatim, so the presentation modifier must still reach it.
         await InitializeAsync(Capabilities());
         await OpenAsync("global int Seed = 1;\nint main() { return Seed; }\n");
 
@@ -193,9 +202,9 @@ public class SemanticTokensHandlerTests : IDisposable
         Assert.NotNull(result);
         var tokens = Decode(result!["data"]!.Values<int>().ToArray());
 
-        // The client did not advertise cvoloConstant, so no token may carry any bit beyond the three standard modifiers.
-        Assert.All(tokens, t => Assert.True((t.Modifiers & ~0b111) == 0));
-        Assert.Contains(tokens, t => t.Line == 1 && t.Character == 20 && t.Length == 4);
+        const int constantBit = 1 << 3; // cvoloConstant position in the advertised legend.
+        Assert.Contains(tokens, t => t.Line == 0 && t.Character == 11 && t.Length == 4 && (t.Modifiers & constantBit) == constantBit);
+        Assert.Contains(tokens, t => t.Line == 1 && t.Character == 20 && t.Length == 4 && (t.Modifiers & constantBit) == constantBit);
     }
 
     [Fact]
@@ -215,8 +224,11 @@ public class SemanticTokensHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task Full_ExternModifier_IsNotEmittedWhenNotAdvertised()
+    public async Task Full_ExternModifier_IsEmittedForAStandardOnlyClient()
     {
+        // Regression: the real VS Code client's capability payload lists only the ten standard
+        // modifiers, so a legend intersected with that list silently dropped cvoloExternFunction and
+        // extern names rendered with the ordinary function colour.
         await InitializeAsync(Capabilities());
         await OpenAsync("extern int abs(int x);\nint main() { return abs(-1); }\n");
 
@@ -225,9 +237,19 @@ public class SemanticTokensHandlerTests : IDisposable
         Assert.NotNull(result);
         var tokens = Decode(result!["data"]!.Values<int>().ToArray());
 
-        // The client did not advertise any custom modifier, so no token may carry a bit beyond the three standard ones.
-        Assert.All(tokens, t => Assert.True((t.Modifiers & ~0b111) == 0));
-        Assert.Contains(tokens, t => t.Line == 1 && t.Character == 20 && t.Length == 3);
+        const int externBit = 1 << 4; // cvoloExternFunction position in the advertised legend.
+        Assert.Contains(tokens, t => t.Line == 0 && t.Character == 11 && t.Length == 3 && (t.Modifiers & externBit) == externBit);
+        Assert.Contains(tokens, t => t.Line == 1 && t.Character == 20 && t.Length == 3 && (t.Modifiers & externBit) == externBit);
+    }
+
+    [Fact]
+    public async Task Initialize_LegendStaysWithinTheCanonicalModifierSet()
+    {
+        InitializeResponse response = await InitializeAsync(Capabilities());
+
+        string[] legend = response.Capabilities.SemanticTokensProvider!.Legend!.TokenModifiers;
+        Assert.All(legend, modifier => Assert.Contains(modifier, AdvertisedModifiers));
+        Assert.Equal(AdvertisedModifiers.Length, legend.Distinct(StringComparer.Ordinal).Count());
     }
 
     private static List<(int Line, int Character, int Length, int Type, int Modifiers)> Decode(int[] data)
