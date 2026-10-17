@@ -116,7 +116,7 @@ internal sealed class CompletionHandler(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[completion] backend failure for '{documentUri}': {ex.Message}");
+            logger.Warning($"[completion] backend failure uri='{documentUri}' v{context.Version} offset={offset} elapsed={stopwatch.ElapsedMilliseconds}ms: {ex}");
             return null;
         }
 
