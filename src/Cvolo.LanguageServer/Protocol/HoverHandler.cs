@@ -65,13 +65,27 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
         cancellationToken.ThrowIfCancellationRequested();
 
         BackendSymbolInfo? symbol;
+        BackendTypeLayoutInspection? layout = null;
         try
         {
-            symbol = await Store.RunInteractiveQueryAsync(
+            // Both reads belong to the captured snapshot. The layout service
+            // resolves the compiler's type rather than parsing the hover text.
+            var response = await Store.RunInteractiveQueryAsync(
                 context,
                 "hover",
-                () => Store.GetSymbolAtPosition(context, offset),
+                () =>
+                {
+                    var resolved = Store.GetSymbolAtPosition(context, offset);
+                    var typeLayout = resolved is { Kind: BackendSymbolKind.Struct or BackendSymbolKind.Union
+                        or BackendSymbolKind.Local or BackendSymbolKind.Parameter
+                        or BackendSymbolKind.Global or BackendSymbolKind.Constructor }
+                        ? Store.GetTypeLayoutAtPosition(context, offset)
+                        : null;
+                    return (resolved, typeLayout);
+                },
                 cancellationToken).ConfigureAwait(false);
+            symbol = response.resolved;
+            layout = response.typeLayout;
             LogTiming("backend", stopwatch, documentUri);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -88,7 +102,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
             return null;
         }
 
-        Hover? hover = symbol is null ? null : Map(symbol, index, context.Document.Text.Length);
+        Hover? hover = symbol is null ? null : Map(symbol, layout, index, context.Document.Text.Length);
         LogTiming("total", stopwatch, documentUri);
         return hover;
     }
@@ -101,7 +115,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
             logger.Debug($"[perf] hover {phase} took {stopwatch.ElapsedMilliseconds} ms: uri='{uri}'");
     }
 
-    private Hover? Map(BackendSymbolInfo symbol, LineIndex index, int textLength)
+    private Hover? Map(BackendSymbolInfo symbol, BackendTypeLayoutInspection? layout, LineIndex index, int textLength)
     {
         TextSpan span = symbol.SubjectSpan;
 
@@ -121,7 +135,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
 
         return new Hover
         {
-            Contents = FormatContents(symbol.DisplayText, symbol.Documentation, symbol.NativeInterop),
+            Contents = FormatContents(symbol.DisplayText, symbol.Documentation, symbol.NativeInterop, layout),
             Range = new LspRange
             {
                 Start = new Position(range.Start.Line, range.Start.Character),
@@ -130,12 +144,13 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
         };
     }
 
-    private MarkupContent FormatContents(string displayText, string? documentation, BackendNativeInteropMetadata? nativeInterop)
+    private MarkupContent FormatContents(string displayText, string? documentation, BackendNativeInteropMetadata? nativeInterop, BackendTypeLayoutInspection? layout)
     {
         string? nativeDetails = FormatNativeInterop(nativeInterop);
+        string? layoutDetails = FormatCompactLayout(layout);
         if (!markdownAccessor())
         {
-            var sections = new[] { displayText, nativeDetails, documentation }
+            var sections = new[] { displayText, layoutDetails, nativeDetails, documentation }
                 .Where(section => !string.IsNullOrEmpty(section));
             return new MarkupContent
             {
@@ -153,6 +168,8 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
         }
 
         var markdown = $"{fence}cvolo\n{displayText}\n{fence}";
+        if (!string.IsNullOrEmpty(layoutDetails))
+            markdown += $"\n\n{layoutDetails}";
         if (!string.IsNullOrEmpty(nativeDetails))
             markdown += $"\n\n**Native interop**\n\n{nativeDetails.Replace("\n", "  \n", StringComparison.Ordinal)}";
 
@@ -164,6 +181,31 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
             Kind = MarkupKind.Markdown,
             Value = markdown,
         };
+    }
+
+    /// <summary>
+    /// A brief, compiler-derived storage summary for type and value hover.
+    /// Offset notation refers to fields within the struct, not the local
+    /// variable's stack address. Missing metadata is omitted, never guessed.
+    /// </summary>
+    private static string? FormatCompactLayout(BackendTypeLayoutInspection? layout)
+    {
+        if (layout is null)
+            return null;
+
+        var summary = $"**{layout.Size} B** · align {layout.Alignment} B";
+        if (layout.PaddingSize > 0)
+            summary += $" · padding {layout.PaddingSize} B";
+
+        if (layout.Members.Count == 0)
+            return summary;
+
+        // Keep a hover short: show a few fields and let the layout view own
+        // the complete table. No fabricated details for unknown fields.
+        var fields = layout.Members.Take(3)
+            .Select(member => $"`{member.Name}` +{member.Offset}: {member.Size} B");
+        var suffix = layout.Members.Count > 3 ? " · …" : "";
+        return summary + "\n\n" + string.Join(" · ", fields) + suffix;
     }
 
     private static string? FormatNativeInterop(BackendNativeInteropMetadata? metadata)
