@@ -188,7 +188,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
     /// Offset notation refers to fields within the struct, not the local
     /// variable's stack address. Missing metadata is omitted, never guessed.
     /// </summary>
-    private static string? FormatCompactLayout(BackendTypeLayoutInspection? layout)
+    internal static string? FormatCompactLayout(BackendTypeLayoutInspection? layout)
     {
         if (layout is null)
             return null;
