@@ -152,7 +152,9 @@ public class CvoloLibraryClosureTests : IDisposable
 
         var project = _backend.OpenProject(MainUri)!;
         var handle = _backend.Resolve(project, MainUri);
-        const string source = "float CosF(float value) { return System.Math.Float.Cos(value); }";
+        // Explicit import is essential: this Tooling version does not add the SDK
+        // module to the document universe from an arbitrary fully-qualified call alone.
+        const string source = "using System.Math.Float;\nfloat CosF(float value) { return System.Math.Float.Cos(value); }";
         var updated = (ToolingBackendSnapshot)_backend.UpdateDocument(project, handle, source);
 
         Assert.Contains(updated.Snapshot.Documents.Values,
@@ -163,9 +165,20 @@ public class CvoloLibraryClosureTests : IDisposable
         Assert.Same(project, owner);
         Assert.True(_backend.TryResolveDocument(owner!, floatUri, out var floatHandle));
 
-        var snapshot = (ToolingBackendSnapshot)_backend.CaptureCurrentSnapshot(owner!);
-        var stdDocument = snapshot.Snapshot.GetDocument(((CvoloDocumentHandle)floatHandle).DocumentId);
+        // didOpen is not just OpenProject: the document store also applies the
+        // editor text through UpdateDocument, creating a new semantic generation.
+        var opened = (ToolingBackendSnapshot)_backend.UpdateDocument(
+            owner!, floatHandle, File.ReadAllText(floatPath));
+        var stdDocument = opened.Snapshot.GetDocument(((CvoloDocumentHandle)floatHandle).DocumentId);
         Assert.DoesNotContain(stdDocument.GetDiagnostics(), diagnostic => diagnostic.Id == "CVL4045");
+
+        // didClose restores the disk baseline; reopening must not retain
+        // phantom duplicate declarations from the F12 navigation.
+        var closed = (ToolingBackendSnapshot)_backend.RestoreBaseline(owner!, floatHandle);
+        var reopened = (ToolingBackendSnapshot)_backend.UpdateDocument(
+            owner!, floatHandle, File.ReadAllText(floatPath));
+        var reopenedDocument = reopened.Snapshot.GetDocument(((CvoloDocumentHandle)floatHandle).DocumentId);
+        Assert.DoesNotContain(reopenedDocument.GetDiagnostics(), diagnostic => diagnostic.Id == "CVL4045");
     }
 
     [Fact]
