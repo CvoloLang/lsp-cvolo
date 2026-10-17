@@ -27,6 +27,8 @@ internal static class ServerPipeline
         Console.Error.WriteLine($"tooling {ServerMetadata.ToolingVersion}");
         Console.Error.WriteLine($"compiler-line {ServerMetadata.CompilerCompatibilityLine}");
         logger.Info($"{ServerMetadata.ServerName} {ServerMetadata.ServerVersion} starting");
+        logger.Info($"[provenance] commit={ServerMetadata.LanguageServerCommit} tooling={ServerMetadata.ToolingVersion} toolingCommit={ServerMetadata.ToolingCommit} compilerLine={ServerMetadata.CompilerCompatibilityLine} rid={ServerMetadata.RuntimeIdentifier}");
+        logger.Info($"[debug] structuredLog={(logPath is null ? "off" : "enabled")} rawProtocol={(verbose ? "enabled" : "disabled")}");
 
         if (!TryLoadTooling(logger))
         {
