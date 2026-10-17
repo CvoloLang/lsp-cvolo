@@ -266,6 +266,12 @@ internal sealed class CompletionHandler(
             End = new Position(range.End.Line, range.End.Character),
         };
 
+        // The replacement span covers exactly the typed prefix, so an item whose label starts
+        // with that prefix using the same casing is a case-exact match: it sorts ahead of an
+        // item that only matched case-insensitively. For a typed "i" this puts "if"/"int"
+        // before "ITest"/"Initialize" — the ordering a C# editor gives.
+        string prefix = context.Document.Text.ToString()[span.Start..offset];
+
         BackendCompletionResolvableFields clientFields = ClientResolvableFields();
         var staged = new List<StagedResolveItem>();
         var items = new CompletionItem[result.Items.Count];
@@ -292,6 +298,9 @@ internal sealed class CompletionHandler(
                 Kind = MapKind(item.Kind),
                 Detail = item.Detail,
                 FilterText = item.FilterText,
+                SortText = item.Label.StartsWith(prefix, StringComparison.Ordinal)
+                    ? "0" + item.Label
+                    : "1" + item.Label,
                 InsertTextFormat = insertFormat,
                 TextEdit = new TextEdit
                 {

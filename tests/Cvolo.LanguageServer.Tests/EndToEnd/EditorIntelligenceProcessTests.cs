@@ -49,6 +49,80 @@ public class EditorIntelligenceProcessTests
     }
 
     [Fact]
+    public async Task Completion_OverStdio_MatchesNamesCaseInsensitivelyAndOrdersCaseExactMatchesFirst()
+    {
+        const string text =
+            "struct ITest { int Value; }\n" +
+            "int Init()\n" +
+            "{\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "int main()\n" +
+            "{\n" +
+            "    i\n" +
+            "    return 0;\n" +
+            "}\n";
+
+        await WithServerAsync(text, async (server, uri) =>
+        {
+            int offset = text.IndexOf("    i\n", StringComparison.Ordinal) + "    i".Length;
+            var items = await CompletionAtAsync(server, uri, text, offset, 2);
+            var labels = items.Select(item => (string?)item["label"]).ToList();
+
+            // A typed lowercase "i" must surface every name that starts with i/I, regardless of case.
+            Assert.Contains("ITest", labels);
+            Assert.Contains("Init", labels);
+            Assert.Contains("int", labels);
+            Assert.Contains("if", labels);
+
+            string SortKey(string label) =>
+                (string?)items.Single(item => (string?)item["label"] == label)!["sortText"] ?? string.Empty;
+
+            // Case-exact matches (labels that start with the typed "i" exactly) rank ahead of the
+            // names that only matched case-insensitively.
+            Assert.True(string.CompareOrdinal(SortKey("int"), SortKey("ITest")) < 0,
+                $"expected 'int' to sort before 'ITest' (int={SortKey("int")}, ITest={SortKey("ITest")})");
+            Assert.True(string.CompareOrdinal(SortKey("if"), SortKey("Init")) < 0,
+                $"expected 'if' to sort before 'Init' (if={SortKey("if")}, Init={SortKey("Init")})");
+        });
+    }
+
+    [Fact]
+    public async Task SemanticTokens_OverStdio_MarksStandaloneVariadicExternDeclarationsAndTheirCalls()
+    {
+        const string text =
+            "extern void printf(string format, ...);\n" +
+            "extern int getchar();\n" +
+            "int main()\n" +
+            "{\n" +
+            "    printf(\"hi\");\n" +
+            "    return getchar();\n" +
+            "}\n";
+
+        await WithServerAsync(text, RealisticClientCapabilities, async (server, uri, initialize) =>
+        {
+            var legend = initialize["result"]?["capabilities"]?["semanticTokensProvider"]?["legend"]?["tokenModifiers"] as JArray;
+            Assert.NotNull(legend);
+            int externBit = legend!.Select(token => (string)token!).ToList().IndexOf("cvoloExternFunction");
+            Assert.True(externBit >= 0, "the negotiated legend must still carry cvoloExternFunction");
+
+            server.SendJson(JsonRpcFrames.Request(3, "textDocument/semanticTokens/full",
+                $"{{\"textDocument\":{{\"uri\":\"{uri}\"}}}}"));
+            JObject response = await server.WaitForResponseAsync(3).WithTimeout("semantic tokens response");
+            var data = response["result"]?["data"] as JArray;
+            Assert.NotNull(data);
+
+            var tokens = DecodeTokens(data!);
+            foreach ((int line, int start, int length) in new[] { (0, 12, 6), (4, 4, 6), (1, 11, 7), (5, 11, 7) })
+            {
+                var token = Assert.Single(tokens, t => t.Line == line && t.Start == start && t.Length == length);
+                Assert.True((token.Modifiers & (1 << externBit)) != 0,
+                    $"token at {line}:{start} did not carry cvoloExternFunction (modifiers={token.Modifiers})");
+            }
+        });
+    }
+
+    [Fact]
     public async Task SemanticTokens_OverStdio_EmitsTheExternModifierForARealisticClient()
     {
         const string text =
