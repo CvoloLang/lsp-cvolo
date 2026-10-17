@@ -131,12 +131,36 @@ internal sealed class CodeLensHandler(
             return false;
         }
 
+        // CodeLens occupies the line immediately above its target. Move it
+        // above the leading documentation comment, so "/// <summary>" stays
+        // directly attached to the declaration for authors and doc tooling.
+        var firstLine = FirstDocumentationLine(context.Document.Text, range.Start.Line);
+        if (firstLine != range.Start.Line)
+        {
+            range = new LspRange
+            {
+                Start = new Position { Line = firstLine, Character = 0 },
+                End = new Position { Line = firstLine, Character = 0 },
+            };
+        }
+
         codeLens = new CodeLens
         {
             Range = range,
             Command = MapCommand(lens, PresentTitle(lens, offsetFormat), documentUriText, context, anchored),
         };
         return true;
+    }
+
+    internal static int FirstDocumentationLine(string source, int declarationLine)
+    {
+        var lines = source.Split('\n');
+        if (declarationLine <= 0 || declarationLine >= lines.Length)
+            return declarationLine;
+        var first = declarationLine;
+        while (first > 0 && lines[first - 1].TrimStart().StartsWith("///", StringComparison.Ordinal))
+            first--;
+        return first;
     }
 
     /// <summary>
