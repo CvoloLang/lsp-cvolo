@@ -91,6 +91,23 @@ public class TypeLayoutHandlerTests : IDisposable
     }
 
     [Fact]
+    public void HoverLayout_PlainTextDoesNotLeakMarkdownDecorations()
+    {
+        var layout = new BackendTypeLayoutInspection(
+            "App.Window", "x86_64-pc-windows-msvc",
+            24, 8, 24, 0,
+            null, null, null, null,
+            [
+                new BackendTypeLayoutMember("a", "int[]", 0, 16, 8),
+                new BackendTypeLayoutMember("glfwWindow", "void*", 16, 8, 8),
+            ],
+            []);
+
+        Assert.Equal("24 B · align 8 B\n\na +0: 16 B · glfwWindow +16: 8 B",
+            HoverHandler.FormatCompactLayout(layout, markdown: false));
+    }
+
+    [Fact]
     public void HoverLayout_OmitsUnknownFactsAndHonorsPadding()
     {
         Assert.Null(HoverHandler.FormatCompactLayout(null));

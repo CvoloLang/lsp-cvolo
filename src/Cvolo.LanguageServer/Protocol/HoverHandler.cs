@@ -77,7 +77,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
                 {
                     var resolved = Store.GetSymbolAtPosition(context, offset);
                     var typeLayout = resolved is { Kind: BackendSymbolKind.Struct or BackendSymbolKind.Union
-                        or BackendSymbolKind.Local or BackendSymbolKind.Parameter
+                        or BackendSymbolKind.Local
                         or BackendSymbolKind.Global or BackendSymbolKind.Constructor }
                         ? Store.GetTypeLayoutAtPosition(context, offset)
                         : null;
@@ -147,8 +147,9 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
     private MarkupContent FormatContents(string displayText, string? documentation, BackendNativeInteropMetadata? nativeInterop, BackendTypeLayoutInspection? layout)
     {
         string? nativeDetails = FormatNativeInterop(nativeInterop);
-        string? layoutDetails = FormatCompactLayout(layout);
-        if (!markdownAccessor())
+        bool useMarkdown = markdownAccessor();
+        string? layoutDetails = FormatCompactLayout(layout, useMarkdown);
+        if (!useMarkdown)
         {
             var sections = new[] { displayText, layoutDetails, nativeDetails, documentation }
                 .Where(section => !string.IsNullOrEmpty(section));
@@ -188,12 +189,14 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
     /// Offset notation refers to fields within the struct, not the local
     /// variable's stack address. Missing metadata is omitted, never guessed.
     /// </summary>
-    internal static string? FormatCompactLayout(BackendTypeLayoutInspection? layout)
+    internal static string? FormatCompactLayout(BackendTypeLayoutInspection? layout, bool markdown = true)
     {
         if (layout is null)
             return null;
 
-        var summary = $"**{layout.Size} B** · align {layout.Alignment} B";
+        // Plaintext clients must not see Markdown emphasis/backticks literally.
+        var size = $"{layout.Size} B";
+        var summary = (markdown ? $"**{size}**" : size) + $" · align {layout.Alignment} B";
         if (layout.PaddingSize > 0)
             summary += $" · padding {layout.PaddingSize} B";
 
@@ -203,7 +206,9 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
         // Keep a hover short: show a few fields and let the layout view own
         // the complete table. No fabricated details for unknown fields.
         var fields = layout.Members.Take(3)
-            .Select(member => $"`{member.Name}` +{member.Offset}: {member.Size} B");
+            .Select(member =>
+                (markdown ? $"`{member.Name}`" : member.Name)
+                + $" +{member.Offset}: {member.Size} B");
         var suffix = layout.Members.Count > 3 ? " · …" : "";
         return summary + "\n\n" + string.Join(" · ", fields) + suffix;
     }

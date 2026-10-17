@@ -136,7 +136,33 @@ public class NavigationHandlerTests : IDisposable
         Hover? hover = await _session.Client.HoverAsync(_workspace.DocumentUri("main.cvl"), line, character).WithTimeout("hover");
 
         Assert.NotNull(hover);
-        Assert.Equal("Window window", ((MarkupContent)hover!.Contents.Value!).Value);
+        MarkupContent contents = (MarkupContent)hover!.Contents.Value!;
+        Assert.Equal(MarkupKind.PlainText, contents.Kind);
+        Assert.Equal("Window window\n\n4 B · align 4 B\n\nWidth +0: 4 B", contents.Value);
+    }
+
+    [Fact]
+    public async Task Hover_MarkdownClient_OnLocal_ShowsCompilerLayoutWithoutChangingSignature()
+    {
+        const string source =
+            "struct Window { public int Width; }\n" +
+            "int main() {\n" +
+            "    var window = Window { Width: 1 };\n" +
+            "    return window.Width;\n" +
+            "}\n";
+
+        await InitializeAsync(hoverFormats: ["markdown", "plaintext"]);
+        await OpenMainAsync(source);
+
+        var (line, character) = Position(source, "window.Width");
+        Hover? hover = await _session.Client.HoverAsync(_workspace.DocumentUri("main.cvl"), line, character).WithTimeout("hover");
+
+        Assert.NotNull(hover);
+        MarkupContent contents = (MarkupContent)hover!.Contents.Value!;
+        Assert.Equal(MarkupKind.Markdown, contents.Kind);
+        Assert.StartsWith("```cvolo\nWindow window\n```", contents.Value);
+        Assert.Contains("**4 B** · align 4 B", contents.Value);
+        Assert.Contains("`Width` +0: 4 B", contents.Value);
     }
 
     [Fact]
