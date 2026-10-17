@@ -98,7 +98,7 @@
       "cvolo.languageserver.cvolo": {
         "type": "Project",
         "dependencies": {
-          "Cvolo.LanguageServer.Core": "[0.1.0-alpha.9, )"
+          "Cvolo.LanguageServer.Core": "[0.1.0-alpha.12, )"
         }
       }
     },

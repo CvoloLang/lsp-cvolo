@@ -115,6 +115,20 @@ public class DiagnosticPublicationTests : IDisposable
         Assert.Equal(2, DiagnosticFrames.ForUri(_session.Server, MainUri).Last().Version);
     }
 
+    [Fact]
+    public async Task MalformedSource_WithDottedCall_ClearsStaleDiagnosticsAfterEdit()
+    {
+        await InitializeAsync();
+        const string malformed = "int Main() {\n    do\n    Console.WriteLine(\"x\");\n    return 0;\n}";
+        await _session.Client.NotifyDidOpenAsync(MainUri, "cvolo", 1, malformed).WithTimeout("didOpen");
+        await WaitForAsync(published => published.Count > 0, "malformed source diagnostic");
+
+        await _session.Client.NotifyDidChangeAsync(MainUri, 2,
+            new TextDocumentContentChangeEvent { Text = ValidText }).WithTimeout("didChange");
+        await WaitForAsync(published => published.Count >= 2 && published.Last().Count == 0,
+            "recovered source clears diagnostics");
+    }
+
     private Task InitializeAsync()
     {
         return _session.Client.InitializeAsync(processId: null, rootPath: _workspace.DirectoryPath).WithTimeout("initialize");
