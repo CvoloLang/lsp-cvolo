@@ -74,6 +74,37 @@ public class TypeLayoutHandlerTests : IDisposable
         [new BackendTypeLayoutPadding(8, 8, BackendTypeLayoutPaddingKind.Internal)]);
 
     [Fact]
+    public void HoverLayout_UsesCompactCompilerFactsAndFieldOffsets()
+    {
+        var layout = new BackendTypeLayoutInspection(
+            "App.Window", "x86_64-pc-windows-msvc",
+            24, 8, 24, 0,
+            null, null, null, null,
+            [
+                new BackendTypeLayoutMember("a", "int[]", 0, 16, 8),
+                new BackendTypeLayoutMember("glfwWindow", "void*", 16, 8, 8),
+            ],
+            []);
+        var result = HoverHandler.FormatCompactLayout(layout);
+
+        Assert.Equal("**24 B** · align 8 B\n\n`a` +0: 16 B · `glfwWindow` +16: 8 B", result);
+    }
+
+    [Fact]
+    public void HoverLayout_OmitsUnknownFactsAndHonorsPadding()
+    {
+        Assert.Null(HoverHandler.FormatCompactLayout(null));
+        var layout = new BackendTypeLayoutInspection(
+            "App.Payload", "x86_64-pc-windows-msvc",
+            16, 8, 9, 7,
+            null, null, null, null,
+            [new BackendTypeLayoutMember("value", "byte", 0, 1, 1)],
+            []);
+        Assert.Equal("**16 B** · align 8 B · padding 7 B\n\n`value` +0: 1 B",
+            HoverHandler.FormatCompactLayout(layout));
+    }
+
+    [Fact]
     public async Task Layout_ReportsTheCompilerNumbersAndTheTargetIdentity()
     {
         await StartAsync();
