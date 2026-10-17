@@ -186,31 +186,35 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
 
     /// <summary>
     /// A brief, compiler-derived storage summary for type and value hover.
-    /// Offset notation refers to fields within the struct, not the local
-    /// variable's stack address. Missing metadata is omitted, never guessed.
+    /// Each field gets its own line and shows only storage size; detailed
+    /// offsets remain available in the full layout view. Missing metadata
+    /// is omitted rather than guessed.
     /// </summary>
     internal static string? FormatCompactLayout(BackendTypeLayoutInspection? layout, bool markdown = true)
     {
         if (layout is null)
             return null;
 
-        // Plaintext clients must not see Markdown emphasis/backticks literally.
-        var size = $"{layout.Size} B";
-        var summary = (markdown ? $"**{size}**" : size) + $" · align {layout.Alignment} B";
+        // Use ordinary-sized text in both Markdown and plaintext hover.
+        var summary = $"{layout.Size}B · align {layout.Alignment}B";
         if (layout.PaddingSize > 0)
-            summary += $" · padding {layout.PaddingSize} B";
+            summary += $" · padding {layout.PaddingSize}B";
 
         if (layout.Members.Count == 0)
             return summary;
 
-        // Keep a hover short: show a few fields and let the layout view own
-        // the complete table. No fabricated details for unknown fields.
-        var fields = layout.Members.Take(3)
-            .Select(member =>
-                (markdown ? $"`{member.Name}`" : member.Name)
-                + $" +{member.Offset}: {member.Size} B");
-        var suffix = layout.Members.Count > 3 ? " · …" : "";
-        return summary + "\n\n" + string.Join(" · ", fields) + suffix;
+        // The full layout view owns offsets and comprehensive field tables.
+        // Limit the hover to a few rows, but never hide that more fields exist.
+        const int maxVisibleFields = 6;
+        var fields = layout.Members.Take(maxVisibleFields)
+            .Select(member => $"{member.Name}: {member.Size}B")
+            .ToList();
+        if (layout.Members.Count > maxVisibleFields)
+            fields.Add($"… +{layout.Members.Count - maxVisibleFields} more fields");
+
+        // Markdown collapses plain newlines; hard line breaks keep fields
+        // vertical without introducing bullets, large headers or code badges.
+        return summary + "\n\n" + string.Join(markdown ? "  \n" : "\n", fields);
     }
 
     private static string? FormatNativeInterop(BackendNativeInteropMetadata? metadata)

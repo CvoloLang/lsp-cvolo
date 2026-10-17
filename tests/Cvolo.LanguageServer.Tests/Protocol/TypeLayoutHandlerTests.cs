@@ -74,7 +74,7 @@ public class TypeLayoutHandlerTests : IDisposable
         [new BackendTypeLayoutPadding(8, 8, BackendTypeLayoutPaddingKind.Internal)]);
 
     [Fact]
-    public void HoverLayout_UsesCompactCompilerFactsAndFieldOffsets()
+    public void HoverLayout_ListsFieldSizesOnSeparateLinesWithoutOffsets()
     {
         var layout = new BackendTypeLayoutInspection(
             "App.Window", "x86_64-pc-windows-msvc",
@@ -87,7 +87,7 @@ public class TypeLayoutHandlerTests : IDisposable
             []);
         var result = HoverHandler.FormatCompactLayout(layout);
 
-        Assert.Equal("**24 B** · align 8 B\n\n`a` +0: 16 B · `glfwWindow` +16: 8 B", result);
+        Assert.Equal("24B · align 8B\n\na: 16B  \nglfwWindow: 8B", result);
     }
 
     [Fact]
@@ -103,8 +103,27 @@ public class TypeLayoutHandlerTests : IDisposable
             ],
             []);
 
-        Assert.Equal("24 B · align 8 B\n\na +0: 16 B · glfwWindow +16: 8 B",
+        Assert.Equal("24B · align 8B\n\na: 16B\nglfwWindow: 8B",
             HoverHandler.FormatCompactLayout(layout, markdown: false));
+    }
+
+    [Fact]
+    public void HoverLayout_LimitsLongListsWithoutInventingOffsets()
+    {
+        var fields = Enumerable.Range(0, 8)
+            .Select(i => new BackendTypeLayoutMember($"field{i}", "int", i * 4, 4, 4))
+            .ToArray();
+        var layout = new BackendTypeLayoutInspection(
+            "ManyFields", "x64", 32, 4, 32, 0,
+            null, null, null, null, fields, []);
+        var hover = HoverHandler.FormatCompactLayout(layout, markdown: false);
+
+        Assert.NotNull(hover);
+        Assert.Contains("field0: 4B", hover);
+        Assert.Contains("field5: 4B", hover);
+        Assert.DoesNotContain("field6:", hover);
+        Assert.Contains("… +2 more fields", hover);
+        Assert.DoesNotContain("+0:", hover);
     }
 
     [Fact]
@@ -117,7 +136,7 @@ public class TypeLayoutHandlerTests : IDisposable
             null, null, null, null,
             [new BackendTypeLayoutMember("value", "byte", 0, 1, 1)],
             []);
-        Assert.Equal("**16 B** · align 8 B · padding 7 B\n\n`value` +0: 1 B",
+        Assert.Equal("16B · align 8B · padding 7B\n\nvalue: 1B",
             HoverHandler.FormatCompactLayout(layout));
     }
 

@@ -138,7 +138,7 @@ public class NavigationHandlerTests : IDisposable
         Assert.NotNull(hover);
         MarkupContent contents = (MarkupContent)hover!.Contents.Value!;
         Assert.Equal(MarkupKind.PlainText, contents.Kind);
-        Assert.Equal("Window window\n\n4 B · align 4 B\n\nWidth +0: 4 B", contents.Value);
+        Assert.Equal("Window window\n\n4B · align 4B\n\nWidth: 4B", contents.Value);
     }
 
     [Fact]
@@ -161,8 +161,10 @@ public class NavigationHandlerTests : IDisposable
         MarkupContent contents = (MarkupContent)hover!.Contents.Value!;
         Assert.Equal(MarkupKind.Markdown, contents.Kind);
         Assert.StartsWith("```cvolo\nWindow window\n```", contents.Value);
-        Assert.Contains("**4 B** · align 4 B", contents.Value);
-        Assert.Contains("`Width` +0: 4 B", contents.Value);
+        Assert.Contains("4B · align 4B", contents.Value);
+        Assert.Contains("Width: 4B", contents.Value);
+        Assert.DoesNotContain("**4 B**", contents.Value);
+        Assert.DoesNotContain("+0:", contents.Value);
     }
 
     [Fact]
