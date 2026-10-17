@@ -118,6 +118,9 @@ public sealed class LspLogger : ILspLogger, IDisposable
             if (_file is not null)
             {
                 SafeWriteLine(_file, line);
+                // Continuous debug logs must be observable during the session,
+                // including immediately before a server crash.
+                TryFlush(_file);
             }
             else if (consoleAlways || (consoleWhenNoFile && IsVerboseEnabled))
             {
