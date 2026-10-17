@@ -72,7 +72,7 @@ internal sealed class InlayHintHandler(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[inlayHint] backend failure for '{documentUri}': {ex.Message}");
+            logger.Warning($"[inlayHint] backend failure for '{documentUri}': {ex}");
             return null;
         }
 

@@ -81,7 +81,7 @@ internal sealed class SemanticTokensHandler(
         catch (Exception ex) when (ex is not OperationCanceledException and not LocalRpcException)
         {
             // Never publish the exception text: it may embed source. The type is enough to trace.
-            logger.Warning($"[semanticTokens] backend failure for '{documentUri}': {ex.GetType().Name}");
+            logger.Warning($"[semanticTokens] backend failure for '{documentUri}': {ex}");
             throw TypedError(
                 "The compiler backend failed while computing semantic tokens.",
                 CvoloErrorData.BackendUnavailable,

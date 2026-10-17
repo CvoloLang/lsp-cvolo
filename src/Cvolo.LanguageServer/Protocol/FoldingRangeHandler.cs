@@ -53,7 +53,7 @@ internal sealed class FoldingRangeHandler(ILspLogger logger, Func<DocumentStore>
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[foldingRange] backend failure for '{documentUri}': {ex.Message}");
+            logger.Warning($"[foldingRange] backend failure for '{documentUri}': {ex}");
             return null;
         }
 

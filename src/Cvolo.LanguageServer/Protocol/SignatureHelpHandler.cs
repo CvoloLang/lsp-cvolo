@@ -49,7 +49,7 @@ internal sealed class SignatureHelpHandler(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[signatureHelp] backend failure for '{documentUri}': {ex.Message}");
+            logger.Warning($"[signatureHelp] backend failure for '{documentUri}': {ex}");
             return null;
         }
 

@@ -70,7 +70,7 @@ internal sealed class CodeLensHandler(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[codeLens] backend failure for '{documentUri}': {ex.Message}");
+            logger.Warning($"[codeLens] backend failure for '{documentUri}': {ex}");
             return null;
         }
 
