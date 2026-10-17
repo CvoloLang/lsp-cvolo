@@ -138,6 +138,37 @@ public class CvoloLibraryClosureTests : IDisposable
     }
 
     [Fact]
+    public void DefinitionIntoFloatSdk_DidOpen_ReusesOwnerWithoutDuplicateDefinitions()
+    {
+        // The VS Code client issues textDocument/didOpen for the real SDK file
+        // returned by F12. That file must remain in the original compilation
+        // universe, not be treated as another independent project whose SDK
+        // declarations collide with its own source.
+        var mathPath = Path.Combine(AppContext.BaseDirectory, "libraries", "System", "Math");
+        Assert.True(Directory.Exists(mathPath), "Tooling bundle must include System.Math sources");
+        var candidates = Directory.GetFiles(mathPath, "Float.cvl", SearchOption.AllDirectories);
+        var floatPath = Assert.Single(candidates);
+        var floatUri = DocumentUri.Create(floatPath);
+
+        var project = _backend.OpenProject(MainUri)!;
+        var handle = _backend.Resolve(project, MainUri);
+        const string source = "float CosF(float value) { return System.Math.Float.Cos(value); }";
+        var updated = (ToolingBackendSnapshot)_backend.UpdateDocument(project, handle, source);
+
+        Assert.Contains(updated.Snapshot.Documents.Values,
+            document => string.Equals(document.FilePath, floatPath,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+
+        var owner = _backend.OpenProject(floatUri);
+        Assert.Same(project, owner);
+        Assert.True(_backend.TryResolveDocument(owner!, floatUri, out var floatHandle));
+
+        var snapshot = (ToolingBackendSnapshot)_backend.CaptureCurrentSnapshot(owner!);
+        var stdDocument = snapshot.Snapshot.GetDocument(((CvoloDocumentHandle)floatHandle).DocumentId);
+        Assert.DoesNotContain(stdDocument.GetDiagnostics(), diagnostic => diagnostic.Id == "CVL4045");
+    }
+
+    [Fact]
     public void StdSourceWorkspace_DoesNotDuplicateBundledStd()
     {
         var stdPath = Path.Combine(AppContext.BaseDirectory, "libraries", "System", "Math", "Constants.cvl");
