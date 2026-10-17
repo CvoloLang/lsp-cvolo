@@ -19,6 +19,16 @@ namespace Cvolo.LanguageServer.Tests.Protocol;
 [Collection(ProtocolConcurrencyCollection.Name)]
 public class CodeLensHandlerTests : IDisposable
 {
+
+    [Theory]
+    [InlineData("/// <summary>\n/// Field documentation\n/// </summary>\nint Width;", 3, 0)]
+    [InlineData("int Width;", 0, 0)]
+    [InlineData("/// Commentary\n\nint Width;", 2, 2)]
+    public void CodeLens_PositionPrecedesLeadingDocumentation(string source, int declarationLine, int expectedLine)
+    {
+        Assert.Equal(expectedLine, CodeLensHandler.FirstDocumentationLine(source, declarationLine));
+    }
+
     private const string Text = "int main() { return 0; }\n";
 
     private readonly TestWorkspace _workspace;
