@@ -695,7 +695,7 @@ internal sealed partial class CvoloLanguageBackend(
                 MapInsertionPlan(candidate.InsertionPlan),
                 candidate.ItemId is { } itemId ? new CvoloCompletionResolveHandle(toolingSnapshot, itemId) : null,
                 MapResolvableFields(candidate.ResolvableFields),
-                candidate.FilterText));
+                CompletionFilterTextProperty?.GetValue(candidate) as string));
         }
 
         return new BackendCompletionResult(
@@ -1088,6 +1088,22 @@ internal sealed partial class CvoloLanguageBackend(
         return new BackendCodeFixSuccess(texts, edits);
     }
 
+    // The pinned Tooling 0.0.21.1 predates these optional compiler API additions.
+    // Discover them from the loaded assembly so stable releases still build, while
+    // newer Tooling can pass through the compiler's exact completion and token facts.
+    private static readonly System.Reflection.PropertyInfo? CompletionFilterTextProperty =
+        typeof(CompletionCandidate).GetProperty("FilterText", typeof(string));
+
+    private static readonly SemanticTokenModifiers ToolingConstantModifier =
+        Enum.TryParse<SemanticTokenModifiers>("Constant", out var constant)
+            ? constant
+            : SemanticTokenModifiers.None;
+
+    private static readonly SemanticTokenModifiers ToolingExternFunctionModifier =
+        Enum.TryParse<SemanticTokenModifiers>("ExternFunction", out var externFunction)
+            ? externFunction
+            : SemanticTokenModifiers.None;
+
     private static BackendSemanticTokenModifiers MapTokenModifiers(SemanticTokenModifiers modifiers)
     {
         var result = BackendSemanticTokenModifiers.None;
@@ -1097,9 +1113,9 @@ internal sealed partial class CvoloLanguageBackend(
             result |= BackendSemanticTokenModifiers.Readonly;
         if (modifiers.HasFlag(SemanticTokenModifiers.Static))
             result |= BackendSemanticTokenModifiers.Static;
-        if (modifiers.HasFlag(SemanticTokenModifiers.Constant))
+        if (ToolingConstantModifier != SemanticTokenModifiers.None && modifiers.HasFlag(ToolingConstantModifier))
             result |= BackendSemanticTokenModifiers.Constant;
-        if (modifiers.HasFlag(SemanticTokenModifiers.ExternFunction))
+        if (ToolingExternFunctionModifier != SemanticTokenModifiers.None && modifiers.HasFlag(ToolingExternFunctionModifier))
             result |= BackendSemanticTokenModifiers.ExternFunction;
         return result;
     }
