@@ -26,7 +26,8 @@ internal sealed class CompletionHandler(
     Func<bool> snippetSupport,
     Func<string[]> resolveProperties,
     Func<bool> documentationMarkdown,
-    Func<CompletionResolveStore> resolveStoreAccessor)
+    Func<CompletionResolveStore> resolveStoreAccessor,
+    Func<bool>? insertArgumentPlaceholders = null)
 {
     private const int CompletionQuietPeriodMs = 120;
     private const int CompletionMaxAutomaticTextLength = 100_000;
@@ -281,7 +282,10 @@ internal sealed class CompletionHandler(
 
             string insertText;
             InsertTextFormat insertFormat;
-            if (snippetSupport() && item.InsertionPlan is not null && EncodeSnippet(item.InsertionPlan) is { } encodedSnippet)
+            if (snippetSupport()
+                && (insertArgumentPlaceholders?.Invoke() != false || !HasArgumentPlaceholders(item))
+                && item.InsertionPlan is not null
+                && EncodeSnippet(item.InsertionPlan) is { } encodedSnippet)
             {
                 insertText = encodedSnippet;
                 insertFormat = InsertTextFormat.Snippet;
@@ -364,6 +368,21 @@ internal sealed class CompletionHandler(
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Only function/constructor call argument placeholders are optional. Other snippet plans,
+    /// such as a destructor body template, must retain their existing insertion behavior.
+    /// </summary>
+    private static bool HasArgumentPlaceholders(BackendCompletionItem item)
+    {
+        if (item.Kind is not (BackendCompletionKind.Function or BackendCompletionKind.Method
+            or BackendCompletionKind.ExtensionMethod or BackendCompletionKind.Constructor))
+            return false;
+
+        return item.InsertionPlan?.SnippetSegments
+            .OfType<BackendCompletionPlaceholder>()
+            .Any(placeholder => !string.IsNullOrEmpty(placeholder.DefaultText)) == true;
     }
 
     /// <summary>
