@@ -25,6 +25,13 @@ internal sealed record EditorIntelligenceSettings
     public BackendLayoutOptions Layout { get; init; } = BackendLayoutOptions.Default;
 
     /// <summary>
+    /// Whether accepting a callable completion fills its parameter-name placeholders.
+    /// Turning this off selects the compiler's plain insertion text (for example "Begin()")
+    /// while leaving non-callable snippets untouched.
+    /// </summary>
+    public bool InsertArgumentPlaceholders { get; init; } = true;
+
+    /// <summary>
     /// Reads the editor intelligence settings out of a <c>workspace/didChangeConfiguration</c>
     /// payload. Both shapes a client may send are accepted: the fully qualified dotted keys and the
     /// nested <c>cvolo</c> section. Anything absent or not a boolean is left as it is.
@@ -41,6 +48,8 @@ internal sealed record EditorIntelligenceSettings
             CodeLens = ApplyCodeLens(settings, current.CodeLens),
             InlayHints = ApplyInlayHints(settings, current.InlayHints),
             Layout = ApplyLayout(settings, current.Layout),
+            InsertArgumentPlaceholders = ReadBool(settings, "completion", "insertArgumentPlaceholders")
+                ?? current.InsertArgumentPlaceholders,
         };
     }
 
