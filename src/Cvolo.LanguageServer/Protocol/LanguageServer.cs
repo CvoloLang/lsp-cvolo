@@ -158,7 +158,8 @@ internal sealed class LanguageServer(
             () => _state.CompletionSnippetSupport,
             () => _state.CompletionResolveSupportProperties!,
             () => _state.CompletionDocumentationMarkdown,
-            () => ResolveStore));
+            () => ResolveStore,
+            () => _state.EditorIntelligence.InsertArgumentPlaceholders));
 
     /// <summary>textDocument/signatureHelp handler.</summary>
     internal SignatureHelpHandler SignatureHelp => GetOrCreate(
