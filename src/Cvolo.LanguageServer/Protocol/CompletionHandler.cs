@@ -302,9 +302,11 @@ internal sealed class CompletionHandler(
                 Kind = MapKind(item.Kind),
                 Detail = item.Detail,
                 FilterText = item.FilterText,
-                SortText = item.Label.StartsWith(prefix, StringComparison.Ordinal)
-                    ? "0" + item.Label
-                    : "1" + item.Label,
+                SortText = IsExtensionTargetPosition(context.Document.Text.ToString(), span.Start)
+                    ? "0" + i.ToString("D6", System.Globalization.CultureInfo.InvariantCulture)
+                    : item.Label.StartsWith(prefix, StringComparison.Ordinal)
+                        ? "0" + item.Label
+                        : "1" + item.Label,
                 InsertTextFormat = insertFormat,
                 TextEdit = new TextEdit
                 {
@@ -467,6 +469,16 @@ internal sealed class CompletionHandler(
                     break;
             }
         }
+    }
+
+    private static bool IsExtensionTargetPosition(string source, int replacementStart)
+    {
+        if (replacementStart < 0 || replacementStart > source.Length)
+            return false;
+        var lineStart = source.LastIndexOf('\\n', Math.Max(0, replacementStart - 1)) + 1;
+        var before = source[lineStart..replacementStart];
+        return System.Text.RegularExpressions.Regex.IsMatch(before,
+            @"\\bextension[ \\t]+$");
     }
 
     private static CompletionItemKind MapKind(BackendCompletionKind kind)
