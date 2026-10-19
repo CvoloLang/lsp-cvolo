@@ -19,7 +19,7 @@ if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $ExpectedCommit) {
 }
 $version = (Get-Content (Join-Path $root 'tooling.version') -Raw).Trim()
 $compatibility = (Get-Content (Join-Path $root 'compiler-compatibility.version') -Raw).Trim()
-$outputDir = Join-Path $root 'artifacts/tooling/development-pinned'
+$outputDir = (Join-Path $root 'artifacts/tooling/development-pinned') + [System.IO.Path]::DirectorySeparatorChar
 & dotnet restore $project --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Tooling restore failed' }
 & dotnet build $project -c Release --no-restore --nologo "-p:ToolingArtifactDir=$outputDir" "-p:ToolingCommit=$ExpectedCommit"
