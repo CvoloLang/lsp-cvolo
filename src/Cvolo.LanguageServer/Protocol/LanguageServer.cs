@@ -368,7 +368,7 @@ internal sealed class LanguageServer(
                     // struct initializer surfaces its fields as the user types (`Window {`, after a
                     // completed field). Field completion still only activates inside a recognized
                     // aggregate literal; unrelated braces/commas return the ordinary expression list.
-                    TriggerCharacters = [".", "~", "{", ",", " "],
+                    TriggerCharacters = [".", "~", "{", ","],
                 },
                 SignatureHelpProvider = new SignatureHelpOptions
                 {
