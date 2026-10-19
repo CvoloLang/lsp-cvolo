@@ -41,7 +41,27 @@ jobs:
             exit 1
           fi
 
-      - name: Fetch pinned Tooling
+      # Development tests use the exact Cvolo commit that passed full CI.
+      # Tagged releases and master still use immutable verified Tooling assets.
+      - name: Checkout CI-pinned development Tooling source
+        if: startsWith(github.ref, 'refs/heads/develop/') || startsWith(github.base_ref, 'develop/')
+        uses: actions/checkout@v4
+        with:
+          repository: IgorShaposhnikov/Cvolo
+          ref: b40db412215c3466807d3b03dba4f53b4334e406
+          path: .dev-compiler
+          persist-credentials: false
+
+      - name: Build and verify development Tooling
+        if: startsWith(github.ref, 'refs/heads/develop/') || startsWith(github.base_ref, 'develop/')
+        shell: pwsh
+        run: >
+          ./build/use-development-tooling.ps1
+          -CompilerSource ".dev-compiler"
+          -ExpectedCommit "b40db412215c3466807d3b03dba4f53b4334e406"
+
+      - name: Fetch pinned release Tooling
+        if: "!startsWith(github.ref, 'refs/heads/develop/') && !startsWith(github.base_ref, 'develop/')"
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
