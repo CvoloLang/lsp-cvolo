@@ -475,10 +475,10 @@ internal sealed class CompletionHandler(
     {
         if (replacementStart < 0 || replacementStart > source.Length)
             return false;
-        var lineStart = source.LastIndexOf('\\n', Math.Max(0, replacementStart - 1)) + 1;
+        var lineStart = source.LastIndexOf('\n', Math.Max(0, replacementStart - 1)) + 1;
         var before = source[lineStart..replacementStart];
         return System.Text.RegularExpressions.Regex.IsMatch(before,
-            @"\\bextension[ \\t]+$");
+            @"\bextension[ \t]+$");
     }
 
     private static CompletionItemKind MapKind(BackendCompletionKind kind)
