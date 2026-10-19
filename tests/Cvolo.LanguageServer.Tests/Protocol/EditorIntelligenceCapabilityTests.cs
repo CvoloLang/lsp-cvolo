@@ -106,6 +106,18 @@ public class EditorIntelligenceCapabilityTests : IDisposable
     }
 
     [Fact]
+    public async Task Initialize_DoesNotTriggerCompletionAfterEverySpace()
+    {
+        InitializeResponse response = await InitializeAsync(FullClientCapabilities());
+
+        var triggers = response.Capabilities.CompletionProvider!.TriggerCharacters;
+        Assert.DoesNotContain(" ", triggers);
+        Assert.Contains(".", triggers);
+        Assert.Contains("{", triggers);
+        Assert.Contains(",", triggers);
+    }
+
+    [Fact]
     public async Task Initialize_WithoutEditorIntelligenceCapabilities_StillAdvertisesTheProviders()
     {
         InitializeResponse response = await InitializeAsync(new InitializeRequestParams());
