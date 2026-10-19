@@ -24,7 +24,12 @@ public class ProcessLifecycleTests
         using var server = ServerProcess.Start("--stdio");
         server.SendJson(JsonRpcFrames.Request(1, "initialize", $"{{\"processId\":{deadPid},\"rootPath\":null}}"));
 
-        JObject response = await server.WaitForResponseAsync(1).WithTimeout("initialize response");
+        // Windows CI can require more than the generic five-second budget
+        // to start a freshly built self-contained server under parallel test
+        // load. Keep the assertion that a dead client PID is rejected, while
+        // allowing bounded startup time before receiving the error response.
+        JObject response = await server.WaitForResponseAsync(1)
+            .WithTimeout("initialize response", TimeSpan.FromSeconds(20));
         Assert.Equal(-32602, response["error"]!["code"]!.Value<int>());
 
         var exitCode = await server.WaitForExitAsync().WithTimeout("server exit");
