@@ -8,16 +8,21 @@ namespace Cvolo.LanguageServer.Observability;
 /// in-process observer only; it does not claim that a disk writer was started,
 /// drained or exported. Sensitive capture requires a separate consent protocol.
 /// </summary>
-internal sealed class RecordingControlPlane(ICompilerObserver observer)
+internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObservabilitySession? session = null)
 {
     internal const int Version = 1;
     internal const string SetMethod = "cvolo/observability/setRecording.v1";
     internal const string StatusMethod = "cvolo/observability/status.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
+    private readonly LspObservabilitySession? _session = session;
     private readonly object _gate = new();
 
     internal bool Supported => _runtime is not null;
+
+    private RecordingWriterStatus WriterStatus =>
+        _session?.GetWriterStatus()
+        ?? new RecordingWriterStatus("collector_only", false, false, null);
 
     internal RecordingPolicyStatus GetStatus()
     {
@@ -33,7 +38,11 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer)
                 CapturePaths: false,
                 ForensicScope: false,
                 ExportSupported: false,
-                EffectiveFromSequence: null);
+                EffectiveFromSequence: null,
+                WriterState: WriterStatus.State,
+                DiskRecordingActive: WriterStatus.DiskRecordingActive,
+                ReplayIncomplete: WriterStatus.ReplayIncomplete,
+                LastDurableProducerSequence: WriterStatus.LastDurableProducerSequence);
         }
     }
 
@@ -81,8 +90,20 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer)
 
             // CompilerObserver is the single owner of the epoch and of the
             // transition event. No parallel counter is maintained here.
-            _runtime.SetMode(mode);
-            return Ack("applied", null, requested, requestedAt, DateTimeOffset.UtcNow);
+            RecordingWriterTransition transition;
+            if (_session is not null)
+                transition = _session.ApplyMode(mode);
+            else
+            {
+                _runtime.SetMode(mode);
+                transition = new RecordingWriterTransition(true, true, null);
+            }
+
+            if (!transition.Accepted)
+                return Reject(transition.Reason ?? "writer_unavailable");
+
+            return Ack(transition.FullyDrained ? "applied" : "partially_applied",
+                transition.Reason, requested, requestedAt, DateTimeOffset.UtcNow);
         }
     }
 
@@ -103,7 +124,11 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer)
             // Explicitly unknown is safer than inventing one.
             EffectiveFromSequence: null,
             requestedAt,
-            appliedAt);
+            appliedAt,
+            WriterState: WriterStatus.State,
+            DiskRecordingActive: WriterStatus.DiskRecordingActive,
+            ReplayIncomplete: WriterStatus.ReplayIncomplete,
+            LastDurableProducerSequence: WriterStatus.LastDurableProducerSequence);
 }
 
 internal sealed class RecordingPolicyRequest
@@ -125,7 +150,11 @@ internal sealed record RecordingPolicyStatus(
     bool CapturePaths,
     bool ForensicScope,
     bool ExportSupported,
-    long? EffectiveFromSequence);
+    long? EffectiveFromSequence,
+    string WriterState,
+    bool DiskRecordingActive,
+    bool ReplayIncomplete,
+    long? LastDurableProducerSequence);
 
 internal sealed record RecordingPolicyAck(
     int ProtocolVersion,
@@ -140,4 +169,8 @@ internal sealed record RecordingPolicyAck(
     bool ForensicScope,
     long? EffectiveFromSequence,
     DateTimeOffset RequestedAtUtc,
-    DateTimeOffset? AppliedAtUtc);
+    DateTimeOffset? AppliedAtUtc,
+    string WriterState,
+    bool DiskRecordingActive,
+    bool ReplayIncomplete,
+    long? LastDurableProducerSequence);

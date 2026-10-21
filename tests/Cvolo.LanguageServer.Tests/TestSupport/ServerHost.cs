@@ -55,10 +55,10 @@ internal sealed class ServerHost : IDisposable
         Termination = termination;
     }
 
-    public static ServerHost Start(DuplexTestTransport transport, ILspLogger? logger = null, IClientProcessWatcher? watcher = null, Action<JsonRpc>? configureRpc = null, Func<DocumentStore>? storeFactory = null, ICompilerObserver? observer = null)
+    public static ServerHost Start(DuplexTestTransport transport, ILspLogger? logger = null, IClientProcessWatcher? watcher = null, Action<JsonRpc>? configureRpc = null, Func<DocumentStore>? storeFactory = null, ICompilerObserver? observer = null, LspObservabilitySession? recordingSession = null)
     {
         TerminationRequest termination = new();
-        LanguageServerImpl server = new(termination, logger ?? new NullLspLogger(), watcher ?? new FakeClientProcessWatcher(), storeFactory, observer);
+        LanguageServerImpl server = new(termination, logger ?? new NullLspLogger(), watcher ?? new FakeClientProcessWatcher(), storeFactory, observer, recordingSession);
         RecordingStream serverOutput = new(transport.ServerOutput);
         JsonMessageFormatter formatter = new();
         formatter.JsonSerializer.ContractResolver = new CamelCasePropertyNamesContractResolver();

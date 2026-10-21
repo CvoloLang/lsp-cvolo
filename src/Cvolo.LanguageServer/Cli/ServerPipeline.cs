@@ -40,7 +40,7 @@ internal static class ServerPipeline
         TerminationRequest termination = new();
         using IClientProcessWatcher clientWatcher = ClientProcessWatcherFactory.Create();
         using LspObservabilitySession observability = LspObservabilitySession.Start();
-        using Protocol.LanguageServer server = new(termination, logger, clientWatcher, observer: observability.Observer);
+        using Protocol.LanguageServer server = new(termination, logger, clientWatcher, observer: observability.Observer, recordingSession: observability);
         observability.Emit(new CompilerEvent
         {
             Event = "server.start",

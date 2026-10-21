@@ -22,7 +22,8 @@ internal sealed class LanguageServer(
     ILspLogger logger,
     IClientProcessWatcher clientWatcher,
     Func<DocumentStore>? storeFactory = null,
-    ICompilerObserver? observer = null) : IDisposable
+    ICompilerObserver? observer = null,
+    LspObservabilitySession? recordingSession = null) : IDisposable
 {
     private const string QuickFixKind = "quickfix";
 
@@ -53,7 +54,7 @@ internal sealed class LanguageServer(
 
     private readonly SessionState _state = new();
     private RecordingControlPlane? _recordingControl;
-    private RecordingControlPlane RecordingControl => GetOrCreate(ref _recordingControl, () => new RecordingControlPlane(Observer));
+    private RecordingControlPlane RecordingControl => GetOrCreate(ref _recordingControl, () => new RecordingControlPlane(Observer, recordingSession));
     private readonly DiagnosticSink _diagnostics = new(logger);
     private readonly CancellationTokenSource _sessionCancellation = new();
 

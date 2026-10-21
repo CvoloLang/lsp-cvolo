@@ -1,5 +1,6 @@
 using Cvolo.LanguageServer.Core;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
 using Cvolo.Observability.Abstractions;
 using StreamJsonRpc;
 
@@ -21,11 +22,11 @@ internal sealed class ProtocolSession : IDisposable
         Watcher = watcher;
     }
 
-    public static ProtocolSession Start(ILspLogger? logger = null, FakeClientProcessWatcher? watcher = null, Action<JsonRpc>? configureRpc = null, Func<DocumentStore>? storeFactory = null, ICompilerObserver? observer = null)
+    public static ProtocolSession Start(ILspLogger? logger = null, FakeClientProcessWatcher? watcher = null, Action<JsonRpc>? configureRpc = null, Func<DocumentStore>? storeFactory = null, ICompilerObserver? observer = null, LspObservabilitySession? recordingSession = null)
     {
         DuplexTestTransport transport = new();
         FakeClientProcessWatcher effectiveWatcher = watcher ?? new FakeClientProcessWatcher();
-        var server = ServerHost.Start(transport, logger, effectiveWatcher, configureRpc, storeFactory, observer);
+        var server = ServerHost.Start(transport, logger, effectiveWatcher, configureRpc, storeFactory, observer, recordingSession);
         TestClient client = new(transport);
         return new ProtocolSession(transport, server, client, effectiveWatcher);
     }

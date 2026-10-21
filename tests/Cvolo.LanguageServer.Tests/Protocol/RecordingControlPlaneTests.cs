@@ -1,4 +1,5 @@
 using Cvolo.LanguageServer.Tests.TestSupport;
+using Cvolo.LanguageServer.Observability;
 using Cvolo.Observability;
 using Cvolo.Observability.Abstractions;
 using Newtonsoft.Json.Linq;
@@ -125,6 +126,73 @@ public sealed class RecordingControlPlaneTests
         Assert.Equal("off", (string?)current["effectiveMode"]);
         Assert.Equal(0, (long)current["recordingEpoch"]!);
         Assert.Equal(ObservabilityMode.Off, observer.Mode);
+    }
+
+    [Fact]
+    public async Task Off_to_detailed_creates_a_real_JSONL_writer_and_stop_drains_its_events()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "cvolo-obs-" + Guid.NewGuid().ToString("N"));
+        string file = Path.Combine(directory, "trace.jsonl");
+        try
+        {
+            using var recording = LspObservabilitySession.StartForTesting(file);
+            Assert.False(File.Exists(file));
+            using var server = ProtocolSession.Start(observer: recording.Observer, recordingSession: recording);
+            await server.Client.InitializeAsync();
+
+            JObject start = await server.Client.SetRecordingPolicyAsync("detailed");
+            Assert.Equal("applied", (string?)start["status"]);
+            Assert.Equal("active", (string?)start["writerState"]);
+            Assert.True((bool)start["diskRecordingActive"]!);
+            Assert.Equal(1, (long)start["recordingEpoch"]!);
+            Assert.True(File.Exists(file));
+
+            await server.Client.TryUnknownRequestAsync();
+            JObject stop = await server.Client.SetRecordingPolicyAsync("off");
+            Assert.Equal("applied", (string?)stop["status"]);
+            Assert.Equal("off", (string?)stop["effectiveMode"]);
+            Assert.Equal(2, (long)stop["recordingEpoch"]!);
+            Assert.Equal("idle", (string?)stop["writerState"]);
+            Assert.False((bool)stop["diskRecordingActive"]!);
+            Assert.False((bool)stop["replayIncomplete"]!);
+            Assert.True((long)stop["lastDurableProducerSequence"]! >= 0);
+
+            string jsonl = File.ReadAllText(file);
+            Assert.Contains("recording.mode_changed", jsonl, StringComparison.Ordinal);
+            Assert.Contains("rpc.request.received", jsonl, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Writer_open_failure_rejects_start_without_changing_the_effective_epoch()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "cvolo-obs-invalid-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            // Passing an existing directory as the JSONL file path fails on
+            // both Windows and Unix, without relying on filesystem permissions.
+            using var recording = LspObservabilitySession.StartForTesting(directory);
+            using var server = ProtocolSession.Start(observer: recording.Observer, recordingSession: recording);
+            await server.Client.InitializeAsync();
+
+            JObject ack = await server.Client.SetRecordingPolicyAsync("detailed");
+            Assert.Equal("rejected", (string?)ack["status"]);
+            Assert.Equal("writer_open_failed", (string?)ack["reason"]);
+            Assert.Equal("off", (string?)ack["effectiveMode"]);
+            Assert.Equal(0, (long)ack["recordingEpoch"]!);
+            Assert.False((bool)ack["diskRecordingActive"]!);
+            Assert.Equal(ObservabilityMode.Off, recording.Observer.Mode);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
