@@ -174,6 +174,76 @@ public sealed class RpcBoundaryObservabilityTests
     }
 
     [Fact]
+    public async Task Request_uids_include_real_server_instance_and_never_collide_across_sessions()
+    {
+        var (firstObserver, firstQueue) = CreateObserver();
+        var (secondObserver, secondQueue) = CreateObserver();
+        Assert.NotEqual(firstObserver.Identity.ServerInstanceId, secondObserver.Identity.ServerInstanceId);
+
+        using var firstSession = ProtocolSession.Start(observer: firstObserver);
+        using var secondSession = ProtocolSession.Start(observer: secondObserver);
+
+        // Both clients start at numeric RPC id 1. Their internal request identities
+        // must still be distinct when traces are merged into one diagnostic bundle.
+        await Task.WhenAll(
+            firstSession.Client.InitializeAsync(),
+            secondSession.Client.InitializeAsync());
+
+        var firstEvents = Drain(firstQueue);
+        var secondEvents = Drain(secondQueue);
+        var firstReceived = Assert.Single(firstEvents, e => e.Event.Event == "rpc.request.received");
+        var secondReceived = Assert.Single(secondEvents, e => e.Event.Event == "rpc.request.received");
+
+        Assert.NotNull(firstReceived.Event.RequestUid);
+        Assert.NotNull(secondReceived.Event.RequestUid);
+        Assert.StartsWith(firstObserver.Identity.ServerInstanceId + "/rpc/", firstReceived.Event.RequestUid);
+        Assert.StartsWith(secondObserver.Identity.ServerInstanceId + "/rpc/", secondReceived.Event.RequestUid);
+        Assert.NotEqual(firstReceived.Event.RequestUid, secondReceived.Event.RequestUid);
+        Assert.Equal(firstReceived.Event.RpcRequestId, secondReceived.Event.RpcRequestId);
+
+        var firstSent = Assert.Single(firstEvents, e => e.Event.Event == "rpc.response.sent");
+        var secondSent = Assert.Single(secondEvents, e => e.Event.Event == "rpc.response.sent");
+        Assert.Equal(firstReceived.Event.RequestUid, firstSent.Event.RequestUid);
+        Assert.Equal(secondReceived.Event.RequestUid, secondSent.Event.RequestUid);
+        Assert.Equal(0, firstObserver.Catalog!.MissingFields);
+        Assert.Equal(0, secondObserver.Catalog!.MissingFields);
+    }
+
+    [Fact]
+    public async Task Request_after_enabling_recording_has_real_server_scoped_uid()
+    {
+        var options = new ObservabilityOptions
+        {
+            Mode = ObservabilityMode.Off,
+            Emitter = "lsp-boundary-tests",
+            QueueCapacity = 20_000,
+        };
+        var queue = new BoundedEventQueue(options.QueueCapacity);
+        var observer = new CompilerObserver(
+            options,
+            queue: queue,
+            catalog: EventCatalog.CreateKernelCatalog());
+
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync();
+        Assert.Empty(Drain(queue));
+
+        observer.SetMode(ObservabilityMode.Detailed);
+        await session.Client.TryUnknownRequestAsync();
+
+        var events = Drain(queue);
+        var received = Assert.Single(events, e => e.Event.Event == "rpc.request.received");
+        var sent = Assert.Single(events, e => e.Event.Event == "rpc.response.sent");
+
+        Assert.NotNull(received.Event.RequestUid);
+        Assert.StartsWith(observer.Identity.ServerInstanceId + "/rpc/", received.Event.RequestUid);
+        Assert.Equal(received.Event.RequestUid, sent.Event.RequestUid);
+        Assert.Equal(received.Event.RpcRequestId, sent.Event.RpcRequestId);
+        Assert.Equal(0, observer.Catalog!.UnknownEvents);
+        Assert.Equal(0, observer.Catalog!.MissingFields);
+    }
+
+    [Fact]
     public async Task Instrumentation_adds_no_bytes_to_the_protocol_stream()
     {
         var (observer, _) = CreateObserver();

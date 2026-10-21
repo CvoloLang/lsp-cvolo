@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Cvolo.Observability;
 using Cvolo.Observability.Abstractions;
 using StreamJsonRpc;
 using StreamJsonRpc.Protocol;
@@ -18,6 +19,7 @@ internal sealed class RpcObservability : IDisposable
 {
 	private readonly ICompilerObserver _observer;
 	private readonly ConcurrentDictionary<string, string> _pendingRequestUids = new(StringComparer.Ordinal);
+	private string? _serverInstanceId;
 	private long _requestCounter;
 	private JsonRpc? _rpc;
 	private bool _disposed;
@@ -26,9 +28,27 @@ internal sealed class RpcObservability : IDisposable
 	{
 		ArgumentNullException.ThrowIfNull(observer);
 		_observer = observer;
+		// Reuse the same real process identity as the event writer. The abstraction
+		// also permits lightweight custom observers without an identity object.
+		_serverInstanceId = (observer as CompilerObserver)?.Identity.ServerInstanceId;
 	}
 
 	private bool Enabled => _observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0);
+
+	private string ServerInstanceId
+	{
+		get
+		{
+			var existing = Volatile.Read(ref _serverInstanceId);
+			if (existing is not null)
+				return existing;
+
+			// No GUID is generated until recording is enabled. The CAS keeps a
+			// single identity even when requests arrive concurrently.
+			var candidate = Guid.NewGuid().ToString("N");
+			return Interlocked.CompareExchange(ref _serverInstanceId, candidate, null) ?? candidate;
+		}
+	}
 
 	/// <summary>Records one incoming request and allocates its trace-level request identity.</summary>
 	public void OnRequestReceived(JsonRpcRequest request)
@@ -38,7 +58,9 @@ internal sealed class RpcObservability : IDisposable
 			return;
 
 		var key = KeyOf(request.RequestId);
-		var requestUid = $"req-{Interlocked.Increment(ref _requestCounter)}";
+		// A local counter alone would collide across LSP processes and test hosts.
+		// The typed protocol id remains separate in RpcRequestId.
+		var requestUid = $"{ServerInstanceId}/rpc/{Interlocked.Increment(ref _requestCounter)}";
 		_pendingRequestUids[key] = requestUid;
 
 		_observer.Emit(new CompilerEvent
@@ -74,11 +96,16 @@ internal sealed class RpcObservability : IDisposable
 	/// <summary>Pairs a written response with the request identity captured on receipt.</summary>
 	public void OnResponseSent(RequestId requestId, bool success)
 	{
-		if (!Enabled)
+		var enabled = Enabled;
+		if (!enabled && _pendingRequestUids.IsEmpty)
 			return;
 
+		// A response can finish after recording was disabled. Release its pending
+		// correlation even then, without emitting an event in the disabled epoch.
 		var key = KeyOf(requestId);
 		var hasRequest = _pendingRequestUids.TryRemove(key, out var requestUid);
+		if (!enabled)
+			return;
 
 		_observer.Emit(new CompilerEvent
 		{
