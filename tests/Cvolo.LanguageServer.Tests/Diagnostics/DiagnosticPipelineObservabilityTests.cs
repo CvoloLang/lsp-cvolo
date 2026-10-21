@@ -75,7 +75,10 @@ public class DiagnosticPipelineObservabilityTests
     public async Task Publication_is_bracketed_by_attempt_and_sent_with_counts()
     {
         var (observer, queue) = CreateObserver(ObservabilityMode.Detailed);
-        var sink = new DiagnosticSink(new RecordingLspLogger());
+        // Use the real in-process JSON-RPC transport; an unattached sink must fault,
+        // not claim that a diagnostic was sent.
+        using var session = ProtocolSession.Start(new RecordingLspLogger(), observer: observer);
+        var sink = session.Server.Diagnostics;
         var publisher = new DiagnosticPublisher(new RecordingLspLogger(), sink, observer);
 
         var project = new FakeProject();
@@ -95,7 +98,19 @@ public class DiagnosticPipelineObservabilityTests
 
         publisher.Publish(context, run);
 
-        var events = Drain(queue);
+        // Publication is asynchronous: wait for a terminal outcome, not just an enqueue.
+        // Preserve every event drained while polling so neither phase can be missed.
+        var events = new List<StampedEvent>();
+        await WaitUntil(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "diagnostics.publish_sent").Any()
+                || Named(events, "diagnostics.publish_faulted").Any();
+        }, "JSON-RPC diagnostic publication terminal");
+
+        Assert.Contains(session.Server.GetServerFrames(),
+            frame => frame.Contains("\"method\":\"textDocument/publishDiagnostics\"", StringComparison.Ordinal));
+        Assert.Empty(Named(events, "diagnostics.publish_faulted"));
         var attempt = Assert.Single(Named(events, "diagnostics.publish_attempt"));
         Assert.Equal("attempted", attempt.Event.Outcome);
 
