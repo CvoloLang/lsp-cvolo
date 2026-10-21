@@ -118,28 +118,70 @@ public class DocumentStoreObservabilityTests : IDisposable
     {
         var (observer, queue) = CreateObserver(ObservabilityMode.Detailed);
         using var session = ProtocolSession.Start(_logger, observer: observer);
-        await StartAsync(session);
+        var store = await StartAsync(session);
         Drain(queue); // initialize boundary events are not part of this scenario
+
+        var documentUri = DocumentUri.Create(_workspace.PathOf("main.cvl"));
         await OpenMainAsync(session);
-        await session.Client.WaitUntilAsync(() => queue.Count >= 2, "didOpen events");
+
+        // A sent notification does not imply an applied didOpen. Wait for its
+        // actual terminal before advancing the document.
+        var openedEvents = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(openedEvents);
+            return Named(openedEvents, "document.did_open").Any();
+        }, "didOpen terminal");
+        var opened = Assert.Single(Named(openedEvents, "document.did_open"));
+        Assert.Equal("applied", opened.Event.Outcome);
+        Assert.True(store.TryGet(documentUri, out var initial));
+        Assert.Equal(1, initial!.Version.Value);
 
         await session.Client.NotifyDidChangeAsync(
             _workspace.DocumentUri("main.cvl"),
             2,
             Replace(0, 20, 21, "1"));
-        await session.Client.WaitUntilAsync(() => queue.Count >= 5, "first change applied");
-        Drain(queue);
 
-        // An older version than the current one must be refused by the store, not silently applied.
+        // Unrelated RPC and diagnostic events may fill the queue. A version-2
+        // update must actually complete before version 1 can be called stale.
+        var firstChangeEvents = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(firstChangeEvents);
+            return Named(firstChangeEvents, "document.update.applied").Any()
+                || Named(firstChangeEvents, "document.update.rejected").Any();
+        }, "first update terminal");
+        Assert.Empty(Named(firstChangeEvents, "document.update.rejected"));
+        var applied = Assert.Single(Named(firstChangeEvents, "document.update.applied"));
+        Assert.Equal(2, applied.Event.DocumentVersion);
+        Assert.True(store.TryGet(documentUri, out var advanced));
+        Assert.Equal(2, advanced!.Version.Value);
+        Assert.Contains("return 1;", advanced.Text, StringComparison.Ordinal);
+
+        // An older version than the current one must be refused by the store,
+        // with no text or version mutation and a truthful machine reason.
+        Drain(queue);
         await session.Client.NotifyDidChangeAsync(
             _workspace.DocumentUri("main.cvl"),
             1,
             Replace(0, 20, 21, "2"));
-        await session.Client.WaitUntilAsync(() => queue.Count >= 2, "stale change rejection");
 
-        var rejected = Assert.Single(Named(Drain(queue), "document.update.rejected"));
+        var staleEvents = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(staleEvents);
+            return Named(staleEvents, "document.update.rejected").Any();
+        }, "stale change terminal");
+
+        var rejected = Assert.Single(Named(staleEvents, "document.update.rejected"));
         Assert.Equal("rejected", rejected.Event.Outcome);
         Assert.Equal("stale_version", rejected.Event.Reason);
+        Assert.Equal(1, rejected.Event.DocumentVersion);
+        Assert.DoesNotContain(staleEvents, e =>
+            e.Event.Event == "document.update.applied" && e.Event.DocumentVersion == 1);
+        Assert.True(store.TryGet(documentUri, out var unchanged));
+        Assert.Equal(2, unchanged!.Version.Value);
+        Assert.Contains("return 1;", unchanged.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -230,6 +272,9 @@ public class DocumentStoreObservabilityTests : IDisposable
         Assert.Equal(started.Event.OperationId, completed.Event.OperationId);
         Assert.Equal("success", completed.Event.Outcome);
         Assert.Equal("request", AttributeOf(started, "captureKind"));
+        Assert.Null(started.Event.DocumentVersion); // unknown until capture; never synthetic zero
+        Assert.Null(completed.Event.DocumentVersion); // completion retains the opened span's fields
+        Assert.Equal("1", AttributeOf(completed, "documentVersion")); // actual captured version
 
         Assert.Equal(0, observer.Catalog!.UnknownEvents);
         Assert.Equal(0, observer.Catalog!.UnknownOutcomes);
@@ -247,9 +292,42 @@ public class DocumentStoreObservabilityTests : IDisposable
         var otherUri = DocumentUri.Create(_workspace.PathOf("other.cvl"));
         Assert.False(store.TryCapture(otherUri, out _));
 
-        var completed = Assert.Single(Named(Drain(queue), "snapshot.capture.completed"));
+        var events = Drain(queue);
+        var started = Assert.Single(Named(events, "snapshot.capture.started"));
+        var completed = Assert.Single(Named(events, "snapshot.capture.completed"));
         Assert.Equal("not_found", completed.Event.Outcome);
         Assert.Equal("request", AttributeOf(completed, "captureKind"));
+        Assert.Null(started.Event.DocumentVersion);
+        Assert.Null(completed.Event.DocumentVersion);
+        Assert.Null(AttributeOf(completed, "documentVersion"));
+    }
+
+    [Fact]
+    public async Task Diagnostic_run_capture_does_not_fabricate_a_single_document_version()
+    {
+        var (observer, queue) = CreateObserver(ObservabilityMode.Detailed);
+        using var session = ProtocolSession.Start(_logger, observer: observer);
+        var store = await StartAsync(session);
+        var documentUri = DocumentUri.Create(_workspace.PathOf("main.cvl"));
+        await OpenMainAsync(session);
+        await session.Client.WaitUntilAsync(
+            () => store.TryGet(documentUri, out _), "didOpen applied");
+        Assert.True(store.TryGetProject(documentUri, out var project));
+        Drain(queue);
+
+        Assert.True(store.TryCaptureDiagnosticRun(project, out var capture));
+        Assert.NotEmpty(capture.Targets);
+
+        var events = Drain(queue);
+        var started = Assert.Single(Named(events, "snapshot.capture.started"));
+        var completed = Assert.Single(Named(events, "snapshot.capture.completed"));
+        Assert.Equal("diagnostic_run", AttributeOf(started, "captureKind"));
+        Assert.Equal("success", completed.Event.Outcome);
+        Assert.Equal(started.Event.OperationId, completed.Event.OperationId);
+        Assert.Null(started.Event.DocumentVersion);
+        Assert.Null(completed.Event.DocumentVersion);
+        Assert.Null(AttributeOf(completed, "documentVersion"));
+        Assert.Equal(0, observer.Catalog!.MissingFields);
     }
 
     [Fact]

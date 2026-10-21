@@ -90,7 +90,7 @@ internal sealed class DocumentStore(
     /// Emits the start half of a snapshot-capture span. The operation id pairs this event with the
     /// matching completion emitted by <see cref="EmitCaptureCompleted"/>.
     /// </summary>
-    private IOperationScope EmitCaptureStarted(string captureKind, int version)
+    private IOperationScope EmitCaptureStarted(string captureKind)
     {
         if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
             return NoopOperationScope.Instance;
@@ -102,23 +102,30 @@ internal sealed class DocumentStore(
             Detail = DiagnosticDetail.L0,
             Priority = EventPriority.P1,
             Attributes = new[] { new KeyValuePair<string, string>("captureKind", captureKind) },
-            DocumentVersion = version,
+            // Capture occurs before the document state is read. Do not invent a
+            // document version (including zero) merely to populate the start event.
         });
     }
 
     /// <summary>Emits the completion half of a snapshot-capture span with a machine outcome.</summary>
-    private void EmitCaptureCompleted(IOperationScope scope, string captureKind, string outcome, DocumentVersion version)
+    private void EmitCaptureCompleted(IOperationScope scope, string captureKind, string outcome, DocumentVersion? version)
     {
         if (ReferenceEquals(scope, NoopOperationScope.Instance))
             return;
 
-        scope.Complete(
-            outcome,
-            attributes: new[]
-            {
-                new KeyValuePair<string, string>("captureKind", captureKind),
-                new KeyValuePair<string, string>("documentVersion", version.Value.ToString(CultureInfo.InvariantCulture)),
-            });
+        // A capture may fail before finding any document, or cover multiple
+        // documents with different versions. In those cases version is unknown,
+        // not zero. A successful single-document capture records the real value.
+        IReadOnlyList<KeyValuePair<string, string>> attributes = version is { } known
+            ? [
+                new("captureKind", captureKind),
+                new("documentVersion", known.Value.ToString(CultureInfo.InvariantCulture)),
+            ]
+            : [
+                new("captureKind", captureKind),
+            ];
+
+        scope.Complete(outcome, attributes: attributes);
     }
 
     /// <summary>
@@ -403,7 +410,7 @@ internal sealed class DocumentStore(
     /// </summary>
     public bool TryCapture(DocumentUri uri, out SemanticRequestContext context)
     {
-        IOperationScope capture = EmitCaptureStarted(CaptureKindRequest, 0);
+        IOperationScope capture = EmitCaptureStarted(CaptureKindRequest);
         var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
@@ -428,7 +435,7 @@ internal sealed class DocumentStore(
             context = default;
         }
 
-        EmitCaptureCompleted(capture, CaptureKindRequest, CaptureOutcomeNotFound, default);
+        EmitCaptureCompleted(capture, CaptureKindRequest, CaptureOutcomeNotFound, null);
         return false;
     }
 
@@ -438,14 +445,14 @@ internal sealed class DocumentStore(
     /// </summary>
     public bool TryCaptureSemanticEdit(DocumentUri uri, out SemanticEditRequestContext context)
     {
-        IOperationScope capture = EmitCaptureStarted(CaptureKindSemanticEdit, 0);
+        IOperationScope capture = EmitCaptureStarted(CaptureKindSemanticEdit);
         var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
             if (!_documents.TryGetValue(uri, out DocumentEntry? current))
             {
                 context = null!;
-                EmitCaptureCompleted(capture, CaptureKindSemanticEdit, CaptureOutcomeNotFound, default);
+                EmitCaptureCompleted(capture, CaptureKindSemanticEdit, CaptureOutcomeNotFound, null);
                 return false;
             }
 
@@ -512,7 +519,7 @@ internal sealed class DocumentStore(
     /// </summary>
     public bool TryCaptureDiagnosticRun(BackendProject project, out DiagnosticRunContext context)
     {
-        IOperationScope capture = EmitCaptureStarted(CaptureKindDiagnosticRun, 0);
+        IOperationScope capture = EmitCaptureStarted(CaptureKindDiagnosticRun);
         var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
@@ -536,7 +543,7 @@ internal sealed class DocumentStore(
                 capture,
                 CaptureKindDiagnosticRun,
                 captured ? CaptureOutcomeSuccess : CaptureOutcomeNotFound,
-                default);
+                null);
             return captured;
         }
     }
