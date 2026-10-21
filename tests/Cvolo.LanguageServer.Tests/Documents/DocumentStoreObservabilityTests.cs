@@ -85,19 +85,45 @@ public class DocumentStoreObservabilityTests : IDisposable
     {
         var (observer, queue) = CreateObserver(ObservabilityMode.Detailed);
         using var session = ProtocolSession.Start(_logger, observer: observer);
-        await StartAsync(session);
+        var store = await StartAsync(session);
         Drain(queue); // initialize boundary events are not part of this scenario
+
+        var documentUri = DocumentUri.Create(_workspace.PathOf("main.cvl"));
         await OpenMainAsync(session);
-        await session.Client.WaitUntilAsync(() => queue.Count >= 2, "didOpen events");
-        Drain(queue);
+
+        // An acknowledged transport notification is not a completed didOpen.
+        // Retain everything drained while waiting for the actual open outcome.
+        var openedEvents = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(openedEvents);
+            return Named(openedEvents, "document.did_open").Any();
+        }, "didOpen applied");
+
+        var opened = Assert.Single(Named(openedEvents, "document.did_open"));
+        Assert.Equal("applied", opened.Event.Outcome);
+        Assert.True(store.TryGet(documentUri, out var initial));
+        Assert.Equal(1, initial!.Version.Value);
 
         await session.Client.NotifyDidChangeAsync(
             _workspace.DocumentUri("main.cvl"),
             2,
             Replace(0, 20, 21, "1"));
-        await session.Client.WaitUntilAsync(() => queue.Count >= 3, "document update events");
 
-        var events = Drain(queue);
+        // An arbitrary queue size may be satisfied by background diagnostic or
+        // RPC events. Wait for THIS update's terminal, retaining its received
+        // half and failing if the edit was actually rejected.
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.update.applied")
+                .Any(e => e.Event.DocumentVersion == 2)
+                || Named(events, "document.update.rejected")
+                .Any(e => e.Event.DocumentVersion == 2);
+        }, "document update version 2 terminal");
+
+        Assert.Empty(Named(events, "document.update.rejected"));
         var received = Assert.Single(Named(events, "document.update.received"));
         Assert.Equal("received", received.Event.Outcome);
         Assert.Equal(2, received.Event.DocumentVersion);
@@ -106,6 +132,10 @@ public class DocumentStoreObservabilityTests : IDisposable
         Assert.Equal("applied", applied.Event.Outcome);
         Assert.Null(applied.Event.Reason);
         Assert.Equal(2, applied.Event.DocumentVersion);
+
+        Assert.True(store.TryGet(documentUri, out var current));
+        Assert.Equal(2, current!.Version.Value);
+        Assert.Contains("return 1;", current.Text, StringComparison.Ordinal);
 
         Assert.Equal(0, observer.Catalog!.UnknownEvents);
         Assert.Equal(0, observer.Catalog!.UnknownOutcomes);
@@ -189,22 +219,46 @@ public class DocumentStoreObservabilityTests : IDisposable
     {
         var (observer, queue) = CreateObserver(ObservabilityMode.Detailed);
         using var session = ProtocolSession.Start(_logger, observer: observer);
-        await StartAsync(session);
+        var store = await StartAsync(session);
         Drain(queue); // initialize boundary events are not part of this scenario
         await OpenMainAsync(session);
-        await session.Client.WaitUntilAsync(() => queue.Count >= 2, "didOpen events");
-        Drain(queue);
 
-        // Replacing a character far beyond the end of the document cannot be applied.
+        var openedEvents = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(openedEvents);
+            return Named(openedEvents, "document.did_open").Any();
+        }, "didOpen terminal");
+
+        var opened = Assert.Single(Named(openedEvents, "document.did_open"));
+        Assert.Equal("applied", opened.Event.Outcome);
+        var documentUri = DocumentUri.Create(_workspace.PathOf("main.cvl"));
+        Assert.True(store.TryGet(documentUri, out var before));
+        Assert.Equal(1, before!.Version.Value);
+
+        // An out-of-bounds edit must be refused without mutating text or version.
         await session.Client.NotifyDidChangeAsync(
             _workspace.DocumentUri("main.cvl"),
             2,
             Replace(0, 200, 201, "x"));
-        await session.Client.WaitUntilAsync(() => queue.Count >= 2, "invalid change rejection");
 
-        var rejected = Assert.Single(Named(Drain(queue), "document.update.rejected"));
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.update.rejected")
+                .Any(e => e.Event.DocumentVersion == 2);
+        }, "invalid document update terminal");
+
+        var rejected = Assert.Single(Named(events, "document.update.rejected"));
         Assert.Equal("rejected", rejected.Event.Outcome);
         Assert.Equal("invalid_change", rejected.Event.Reason);
+        Assert.Equal(2, rejected.Event.DocumentVersion);
+        Assert.DoesNotContain(events, e =>
+            e.Event.Event == "document.update.applied" && e.Event.DocumentVersion == 2);
+        Assert.True(store.TryGet(documentUri, out var after));
+        Assert.Equal(1, after!.Version.Value);
+        Assert.Equal(before.Text, after.Text);
     }
 
     [Fact]

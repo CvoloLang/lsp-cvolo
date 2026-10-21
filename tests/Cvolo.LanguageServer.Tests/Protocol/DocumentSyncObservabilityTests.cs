@@ -175,23 +175,32 @@ public class DocumentSyncObservabilityTests : IDisposable
     {
         var (observer, queue) = CreateObserver(ObservabilityMode.Detailed);
         using var session = ProtocolSession.Start(_logger, observer: observer);
-        await StartAsync(session);
+        var store = await StartAsync(session);
         Drain(queue);
 
+        var documentUri = DocumentUri.Create(_workspace.PathOf("other.cvl"));
         await session.Client.NotifyDidChangeAsync(
                 _workspace.DocumentUri("other.cvl"),
                 1,
                 new TextDocumentContentChangeEvent { Text = "int main() { return 0; }" })
             .WithTimeout("didChange");
-        await session.Client.WaitUntilAsync(() => queue.Count >= 2, "didChange events");
 
-        var events = Drain(queue);
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.did_change.rejected")
+                .Any(e => e.Event.DocumentVersion == 1);
+        }, "unopened-document change terminal");
+
         var received = Assert.Single(Named(events, "document.did_change.received"));
         Assert.Equal("received", received.Event.Outcome);
 
         var rejected = Assert.Single(Named(events, "document.did_change.rejected"));
         Assert.Equal("rejected", rejected.Event.Outcome);
         Assert.Equal("store_not_applied", rejected.Event.Reason);
+        Assert.Equal(1, rejected.Event.DocumentVersion);
+        Assert.False(store.TryGet(documentUri, out _));
     }
 
     [Fact]
