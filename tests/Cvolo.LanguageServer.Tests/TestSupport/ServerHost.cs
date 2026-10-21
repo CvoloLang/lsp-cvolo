@@ -10,7 +10,6 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
 using StreamJsonRpc;
-using StreamJsonRpc.Reflection;
 using LanguageServerImpl = Cvolo.LanguageServer.Protocol.LanguageServer;
 
 namespace Cvolo.LanguageServer.Tests.TestSupport;
@@ -66,13 +65,14 @@ internal sealed class ServerHost : IDisposable
         formatter.JsonSerializer.NullValueHandling = NullValueHandling.Ignore;
         formatter.JsonSerializer.Converters.Add(new UriJsonConverter());
         RpcObservability rpcObservability = new(server.Observer);
-        HeaderDelimitedMessageHandler handler = new ObservedHeaderDelimitedHandler(serverOutput, transport.ServerInput, formatter, rpcObservability);
+        HeaderDelimitedMessageHandler handler = new ObservedHeaderDelimitedHandler(
+            serverOutput, transport.ServerInput, formatter, rpcObservability,
+            () => server.HasPendingRejectedInitializeResponse,
+            server.OnRejectedInitializeResponseFlushed);
         IngressPipeline ingress = new();
         server.Ingress = ingress;
         JsonRpc rpc = new(handler);
         rpcObservability.Attach(rpc);
-        if (rpc is IJsonRpcFormatterCallbacks callbacks)
-            callbacks.ResponseSent += (_, response) => server.OnRpcResponseSent(response.IsSuccessfulResponse);
         rpc.SynchronizationContext = new IngressSynchronizationContext(ingress);
         server.Diagnostics.Attach(rpc);
         server.Refresh.Attach(rpc);

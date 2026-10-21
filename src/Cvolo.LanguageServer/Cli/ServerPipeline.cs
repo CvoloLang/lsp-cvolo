@@ -10,7 +10,6 @@ using Cvolo.Observability.Abstractions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using StreamJsonRpc;
-using StreamJsonRpc.Reflection;
 using System.Reflection;
 using System.Runtime.Loader;
 
@@ -64,7 +63,10 @@ internal static class ServerPipeline
         }
 
         using RpcObservability rpcObservability = new(observability.Observer);
-        using ObservedHeaderDelimitedHandler handler = new(stdout, stdin, formatter, rpcObservability);
+        using ObservedHeaderDelimitedHandler handler = new(
+            stdout, stdin, formatter, rpcObservability,
+            () => server.HasPendingRejectedInitializeResponse,
+            server.OnRejectedInitializeResponseFlushed);
         observability.Emit(new CompilerEvent
         {
             Event = "transport.ready",
@@ -77,8 +79,6 @@ internal static class ServerPipeline
         server.Ingress = ingress;
         JsonRpc rpc = new(handler);
         rpcObservability.Attach(rpc);
-        if (rpc is IJsonRpcFormatterCallbacks callbacks)
-            callbacks.ResponseSent += (_, response) => server.OnRpcResponseSent(response.IsSuccessfulResponse);
         rpc.SynchronizationContext = new IngressSynchronizationContext(ingress);
         server.Diagnostics.Attach(rpc);
         server.Refresh.Attach(rpc);

@@ -561,13 +561,16 @@ internal sealed class LanguageServer(
     }
 
     /// <summary>
-    /// Invoked by the transport after its response has been sent. A rejected
-    /// initialize request with a dead client PID must deliver InvalidParams
-    /// before asking the process to exit abnormally.
+    /// A process exit for invalid initialize must be delayed until the
+    /// JSON-RPC error frame is flushed by the actual message handler.
+    /// ResponseSent alone precedes that transport boundary.
     /// </summary>
-    internal void OnRpcResponseSent(bool successful)
+    internal bool HasPendingRejectedInitializeResponse =>
+        Volatile.Read(ref _exitAfterInitializeErrorResponse) == 1;
+
+    internal void OnRejectedInitializeResponseFlushed()
     {
-        if (!successful && Interlocked.Exchange(ref _exitAfterInitializeErrorResponse, 0) == 1)
+        if (Interlocked.Exchange(ref _exitAfterInitializeErrorResponse, 0) == 1)
             termination.TryRequestAbnormal();
     }
 

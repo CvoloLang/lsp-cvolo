@@ -14,15 +14,22 @@ namespace Cvolo.LanguageServer.Observability;
 internal sealed class ObservedHeaderDelimitedHandler : HeaderDelimitedMessageHandler
 {
 	private readonly RpcObservability? _observability;
+	private readonly Func<bool>? _isRejectedInitializePending;
+	private readonly Action? _rejectedInitializeFlushed;
+	private bool _notifyAfterFlush;
 
 	public ObservedHeaderDelimitedHandler(
 		Stream writeStream,
 		Stream readStream,
 		IJsonRpcMessageFormatter formatter,
-		RpcObservability? observability)
+		RpcObservability? observability,
+		Func<bool>? isRejectedInitializePending = null,
+		Action? rejectedInitializeFlushed = null)
 		: base(writeStream, readStream, formatter)
 	{
 		_observability = observability;
+		_isRejectedInitializePending = isRejectedInitializePending;
+		_rejectedInitializeFlushed = rejectedInitializeFlushed;
 	}
 
 	protected override async ValueTask<JsonRpcMessage?> ReadCoreAsync(CancellationToken cancellationToken)
@@ -38,5 +45,28 @@ internal sealed class ObservedHeaderDelimitedHandler : HeaderDelimitedMessageHan
 		}
 
 		return message;
+	}
+
+	/// <summary>
+	/// A ResponseSent callback does not guarantee the JSON-RPC frame was flushed
+	/// to stdout. Only flag the actual error response while the server has
+	/// rejected initialize for a dead client; do not terminate for unrelated
+	/// outbound notifications or successful responses.
+	/// </summary>
+	protected override void Write(JsonRpcMessage content, CancellationToken cancellationToken)
+	{
+		base.Write(content, cancellationToken);
+		_notifyAfterFlush = content is JsonRpcError
+			&& _isRejectedInitializePending?.Invoke() == true;
+	}
+
+	protected override async ValueTask FlushAsync(CancellationToken cancellationToken)
+	{
+		await base.FlushAsync(cancellationToken).ConfigureAwait(false);
+		if (_notifyAfterFlush)
+		{
+			_notifyAfterFlush = false;
+			_rejectedInitializeFlushed?.Invoke();
+		}
 	}
 }
