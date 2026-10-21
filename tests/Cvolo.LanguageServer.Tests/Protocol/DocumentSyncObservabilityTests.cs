@@ -74,11 +74,17 @@ public class DocumentSyncObservabilityTests : IDisposable
         await session.Client.NotifyDidOpenAsync(_workspace.DocumentUri("main.cvl"), "cvolo", 1, "int main() { return 0; }")
             .WithTimeout("didOpen");
 
-        // The sync notification triggers project discovery before it settles, so wait for the
-        // observable applied+scheduled pair instead of assuming the barrier request outlived it.
-        await session.Client.WaitUntilAsync(() => queue.Count >= 2, "document sync events");
+        // RPC and worker events can arrive before didOpen finishes. Wait for the actual
+        // didOpen outcome while retaining earlier events, rather than using queue size.
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.did_open").Any();
+        }, "didOpen outcome");
 
-        var events = Drain(queue);
+        Assert.True(session.Server.Store.TryGet(DocumentUri.Create(_workspace.PathOf("main.cvl")), out var stored));
+        Assert.Equal(1, stored!.Version.Value);
         var opened = Assert.Single(Named(events, "document.did_open"));
         Assert.Equal("applied", opened.Event.Outcome);
         Assert.Null(opened.Event.Reason);

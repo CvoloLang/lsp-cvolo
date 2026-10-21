@@ -135,6 +135,10 @@ public sealed class LifecycleObservabilityTests : IDisposable
             .WithTimeout("initialize");
         await session.Client.NotifyInitializedAsync().WithTimeout("initialized");
         await session.Client.NotifyDidChangeConfigurationAsync(new JObject()).WithTimeout("didChangeConfiguration");
+        // NotifyAsync reports that the client sent a notification, not that the server
+        // handled it. A protocol barrier verifies the full off-mode session still works.
+        await session.Client.DrainNotificationsAsync().WithTimeout("notifications dispatched");
+        await session.Client.WaitUntilAsync(() => session.Server.InitializedReceived, "initialized accepted");
 
         Assert.True(session.Server.InitializedReceived);
         List<StampedEvent> events = Drain(queue);
