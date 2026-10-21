@@ -16,10 +16,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cvolo.LanguageServer.Core\Cvolo.LanguageServer.Core.csproj" />
-    <Reference Include="Cvolo.Observability.Abstractions">
+    <Reference Include="Cvolo.Observability.Abstractions" Condition="'$(CvoloObservabilityBundled)' == 'true'">
       <HintPath>$(CvoloToolingDir)/Cvolo.Observability.Abstractions.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <ProjectReference Include="$(CvoloLocalCompilerRoot)src/Cvolo.Observability.Abstractions/Cvolo.Observability.Abstractions.csproj"
+                      Condition="'$(CvoloObservabilityUseLocalSource)' == 'true'" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(CvoloManagedToolingAvailable)' == 'true'">

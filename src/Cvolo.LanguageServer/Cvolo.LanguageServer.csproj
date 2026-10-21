@@ -80,14 +80,18 @@
     <ProjectReference Include="..\Cvolo.LanguageServer.Core\Cvolo.LanguageServer.Core.csproj" />
     <ProjectReference Include="..\Cvolo.LanguageServer.Cvolo\Cvolo.LanguageServer.Cvolo.csproj" />
     <!-- Single binary identity shared by the LSP and the verified Tooling bundle. -->
-    <Reference Include="Cvolo.Observability.Abstractions">
+    <Reference Include="Cvolo.Observability.Abstractions" Condition="'$(CvoloObservabilityBundled)' == 'true'">
       <HintPath>$(CvoloToolingDir)/Cvolo.Observability.Abstractions.dll</HintPath>
       <Private>true</Private>
     </Reference>
-    <Reference Include="Cvolo.Observability">
+    <ProjectReference Include="$(CvoloLocalCompilerRoot)src/Cvolo.Observability.Abstractions/Cvolo.Observability.Abstractions.csproj"
+                      Condition="'$(CvoloObservabilityUseLocalSource)' == 'true'" />
+    <Reference Include="Cvolo.Observability" Condition="'$(CvoloObservabilityBundled)' == 'true'">
       <HintPath>$(CvoloToolingDir)/Cvolo.Observability.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <ProjectReference Include="$(CvoloLocalCompilerRoot)src/Cvolo.Observability/Cvolo.Observability.csproj"
+                      Condition="'$(CvoloObservabilityUseLocalSource)' == 'true'" />
   </ItemGroup>
 
   <ItemGroup>

@@ -29,14 +29,18 @@
     <ProjectReference Include="..\..\src\Cvolo.LanguageServer.Core\Cvolo.LanguageServer.Core.csproj" />
     <ProjectReference Include="..\..\src\Cvolo.LanguageServer.Cvolo\Cvolo.LanguageServer.Cvolo.csproj" />
     <!-- Test against the runtime shipped in the same verified Tooling bundle. -->
-    <Reference Include="Cvolo.Observability.Abstractions">
+    <Reference Include="Cvolo.Observability.Abstractions" Condition="'$(CvoloObservabilityBundled)' == 'true'">
       <HintPath>$(CvoloToolingDir)/Cvolo.Observability.Abstractions.dll</HintPath>
       <Private>true</Private>
     </Reference>
-    <Reference Include="Cvolo.Observability">
+    <ProjectReference Include="$(CvoloLocalCompilerRoot)src/Cvolo.Observability.Abstractions/Cvolo.Observability.Abstractions.csproj"
+                      Condition="'$(CvoloObservabilityUseLocalSource)' == 'true'" />
+    <Reference Include="Cvolo.Observability" Condition="'$(CvoloObservabilityBundled)' == 'true'">
       <HintPath>$(CvoloToolingDir)/Cvolo.Observability.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <ProjectReference Include="$(CvoloLocalCompilerRoot)src/Cvolo.Observability/Cvolo.Observability.csproj"
+                      Condition="'$(CvoloObservabilityUseLocalSource)' == 'true'" />
   </ItemGroup>
 
   <!-- Compile-time access to the pinned tooling for backend assertions. The

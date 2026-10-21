@@ -37,4 +37,23 @@
        Generated only by fetch-tooling or use-development-tooling; never committed. -->
   <Import Project="$(MSBuildThisFileDirectory)artifacts/tooling-dir.props"
           Condition="Exists('$(MSBuildThisFileDirectory)artifacts/tooling-dir.props')" />
+
+  <!-- Tooling 0.0.21.2 was released before the observability assemblies were
+       included in its runtime payload. A CI-built development bundle includes
+       them; local developers using the older verified release may temporarily
+       build the matching source projects from the sibling Compiler checkout.
+       Never use an unpinned source fallback in CI or release packaging. -->
+  <PropertyGroup>
+    <CvoloLocalCompilerRoot Condition="'$(CvoloLocalCompilerRoot)' == ''">$(MSBuildThisFileDirectory)..\Cvolo\</CvoloLocalCompilerRoot>
+    <CvoloObservabilityBundled Condition="'$(CvoloToolingDir)' != '' and Exists('$(CvoloToolingDir)/Cvolo.Observability.Abstractions.dll') and Exists('$(CvoloToolingDir)/Cvolo.Observability.dll')">true</CvoloObservabilityBundled>
+    <CvoloObservabilityUseLocalSource
+        Condition="'$(CvoloObservabilityBundled)' != 'true' and '$(ContinuousIntegrationBuild)' != 'true'
+            and Exists('$(CvoloLocalCompilerRoot)src/Cvolo.Observability.Abstractions/Cvolo.Observability.Abstractions.csproj')
+            and Exists('$(CvoloLocalCompilerRoot)src/Cvolo.Observability/Cvolo.Observability.csproj')">true</CvoloObservabilityUseLocalSource>
+  </PropertyGroup>
+
+  <Target Name="EnsureObservabilityReferences" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(CvoloObservabilityBundled)' != 'true' and '$(CvoloObservabilityUseLocalSource)' != 'true'"
+           Text="Required Cvolo.Observability assemblies are missing from the verified Tooling bundle at '$(CvoloToolingDir)'. Use a Tooling bundle that contains both Cvolo.Observability.dll and Cvolo.Observability.Abstractions.dll. For local development only, keep the Compiler source checkout beside LanguageServer at '$(CvoloLocalCompilerRoot)' (or set -p:CvoloLocalCompilerRoot=...). CI and release builds never use this source fallback." />
+  </Target>
 </Project>
