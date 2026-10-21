@@ -3,6 +3,7 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.Observability;
 using System.Collections.Concurrent;
 using global::Cvolo.Observability.Abstractions;
 
@@ -39,6 +40,13 @@ internal sealed class DiagnosticScheduler(
     private readonly ConcurrentDictionary<BackendProject, ProjectWorker> _workers = new();
     private readonly ConcurrentDictionary<BackendProject, bool> _unavailable = new();
     private volatile bool _stopped;
+
+    // A counter local to a scheduler would generate the same analysis ids in
+    // another scheduler in the same process. The runtime's server identity
+    // distinguishes restarts and processes; the global counter distinguishes
+    // concurrent scheduler instances in that process.
+    private static long _globalAnalysisCounter;
+    private string? _analysisNamespace;
 
     public void Schedule(BackendProject project)
     {
@@ -95,7 +103,11 @@ internal sealed class DiagnosticScheduler(
 
     private void RunOnce(BackendProject project, ProjectWorker worker)
     {
-        string analysisId = NextAnalysisId();
+        // Disabled observers must not allocate correlation metadata. If recording
+        // starts mid-analysis, a missing id is more truthful than a fabricated one.
+        string? analysisId = _observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0)
+            ? NextAnalysisId()
+            : null;
         DiagnosticRunContext context;
         try
         {
@@ -105,6 +117,10 @@ internal sealed class DiagnosticScheduler(
                 Emit(DiagnosticsDiscardedEvent, "discarded", DiscardReasonNoTargets, analysisId);
                 return;
             }
+
+            // The immutable context is the correlation authority for every
+            // publication, including asynchronous transport completion.
+            context = context with { AnalysisId = analysisId };
         }
         catch (Exception ex)
         {
@@ -163,7 +179,7 @@ internal sealed class DiagnosticScheduler(
         }
     }
 
-    private void HandleFailure(BackendProject project, ProjectWorker worker, DiagnosticRunContext? context, string analysisId, Exception ex)
+    private void HandleFailure(BackendProject project, ProjectWorker worker, DiagnosticRunContext? context, string? analysisId, Exception ex)
     {
         logger.Error($"Diagnostic analysis failed for project '{project}': {ex.Message}");
         int failures = worker.IncrementFailures();
@@ -186,9 +202,18 @@ internal sealed class DiagnosticScheduler(
         }
     }
 
-    private string NextAnalysisId() => $"an-{Interlocked.Increment(ref _analysisCounter)}";
+    private string NextAnalysisId()
+    {
+        string? owner = Volatile.Read(ref _analysisNamespace);
+        if (owner is null)
+        {
+            string proposed = (_observer as CompilerObserver)?.Identity.ServerInstanceId
+                ?? Guid.NewGuid().ToString("N");
+            owner = Interlocked.CompareExchange(ref _analysisNamespace, proposed, null) ?? proposed;
+        }
 
-    private long _analysisCounter;
+        return $"{owner}/analysis/{Interlocked.Increment(ref _globalAnalysisCounter)}";
+    }
 
     private void LogUnexpectedWorkerFailure(BackendProject project, Exception ex)
     {

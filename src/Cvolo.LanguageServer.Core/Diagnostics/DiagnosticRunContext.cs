@@ -11,7 +11,15 @@ namespace Cvolo.LanguageServer.Core.Diagnostics;
 internal sealed record DiagnosticRunContext(
     BackendProject Project,
     BackendSnapshot CurrentProjectSnapshot,
-    IReadOnlyList<DiagnosticPublishTarget> Targets);
+    IReadOnlyList<DiagnosticPublishTarget> Targets)
+{
+    /// <summary>
+    /// Analysis that produced this diagnostic run. Set by the worker after capture
+    /// and carried unchanged through the publication callback. Null for callers
+    /// outside an observed analysis; never invent a correlation id.
+    /// </summary>
+    public string? AnalysisId { get; init; }
+}
 
 /// <summary>
 /// One open document eligible to receive diagnostics, pinned to the session

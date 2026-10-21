@@ -67,6 +67,8 @@ public class DiagnosticPipelineObservabilityTests
         Assert.Equal(started.Event.AnalysisId, completed.Event.AnalysisId);
         var committed = Assert.Single(Named(events, "diagnostics.committed"));
         Assert.Equal(started.Event.AnalysisId, committed.Event.AnalysisId);
+        Assert.Equal(started.Event.AnalysisId, Assert.Single(harness.Publisher.Publishes).Context.AnalysisId);
+        Assert.StartsWith(harness.Observer!.Identity.ServerInstanceId + "/analysis/", started.Event.AnalysisId!);
 
         AssertCatalogClean(harness.Observer);
     }
@@ -86,7 +88,10 @@ public class DiagnosticPipelineObservabilityTests
         var project = new FakeProject();
         var snapshot = new FakeSnapshot(new Dictionary<DocumentUri, string>(DocumentUriPathComparer.Instance), 0);
         var target = new DiagnosticPublishTarget(DocA, new DocumentSessionId(1), new DocumentVersion(1), new FakeHandle(DocA));
-        var context = new DiagnosticRunContext(project, snapshot, [target]);
+        var context = new DiagnosticRunContext(project, snapshot, [target])
+        {
+            AnalysisId = "test-analysis-42",
+        };
         var run = new BackendDiagnosticRun(
             new Dictionary<DocumentUri, string>(DocumentUriPathComparer.Instance) { [DocA] = "text" },
             [
@@ -121,13 +126,83 @@ public class DiagnosticPipelineObservabilityTests
         Assert.Empty(Named(events, "diagnostics.publish_faulted"));
         var attempt = Assert.Single(Named(events, "diagnostics.publish_attempt"));
         Assert.Equal("attempted", attempt.Event.Outcome);
+        Assert.Equal(context.AnalysisId, attempt.Event.AnalysisId);
 
         var sent = Assert.Single(Named(events, "diagnostics.publish_sent"));
         Assert.Equal("sent", sent.Event.Outcome);
+        Assert.Equal(context.AnalysisId, sent.Event.AnalysisId);
         Assert.Equal("1", AttributeOf(sent, "diagnosticCount"));
         Assert.Equal("1", AttributeOf(sent, "documentCount"));
 
-        Assert.Single(Named(events, "decision.diagnostics.publish"));
+        var decision = Assert.Single(Named(events, "decision.diagnostics.publish"));
+        Assert.Equal(context.AnalysisId, decision.Event.AnalysisId);
+        AssertCatalogClean(observer);
+    }
+
+    [Fact]
+    public async Task Independent_diagnostic_workers_never_reuse_the_same_analysis_id()
+    {
+        var first = new Harness();
+        var second = new Harness();
+
+        Assert.NotNull(first.Store.Open(DocA, "cvolo", 1, "first"));
+        Assert.NotNull(second.Store.Open(DocA, "cvolo", 1, "second"));
+        Assert.True(first.Store.TryGetProject(DocA, out BackendProject? firstProject));
+        Assert.True(second.Store.TryGetProject(DocA, out BackendProject? secondProject));
+
+        first.Scheduler.Schedule(firstProject);
+        second.Scheduler.Schedule(secondProject);
+        await WaitUntil(
+            () => first.Publisher.Publishes.Count >= 1 && second.Publisher.Publishes.Count >= 1,
+            "two distinct diagnostic analyses published");
+
+        var firstId = Assert.Single(first.Publisher.Publishes).Context.AnalysisId;
+        var secondId = Assert.Single(second.Publisher.Publishes).Context.AnalysisId;
+        Assert.NotNull(firstId);
+        Assert.NotNull(secondId);
+        Assert.NotEqual(firstId, secondId);
+        Assert.StartsWith(first.Observer!.Identity.ServerInstanceId + "/analysis/", firstId);
+        Assert.StartsWith(second.Observer!.Identity.ServerInstanceId + "/analysis/", secondId);
+        AssertCatalogClean(first.Observer);
+        AssertCatalogClean(second.Observer);
+    }
+
+    [Fact]
+    public async Task Failed_diagnostic_transport_keeps_the_originating_analysis_id()
+    {
+        var (observer, queue) = CreateObserver(ObservabilityMode.Detailed);
+        var logger = new RecordingLspLogger();
+        var publisher = new DiagnosticPublisher(logger, new DiagnosticSink(logger), observer);
+        var context = new DiagnosticRunContext(
+            new FakeProject(),
+            new FakeSnapshot(new Dictionary<DocumentUri, string>(), 0),
+            [new DiagnosticPublishTarget(DocA, new DocumentSessionId(1),
+                new DocumentVersion(1), new FakeHandle(DocA))])
+        {
+            AnalysisId = "test-analysis-fault",
+        };
+        var run = new BackendDiagnosticRun(
+            new Dictionary<DocumentUri, string>(DocumentUriPathComparer.Instance)
+            {
+                [DocA] = "text",
+            }, []);
+
+        // No JSON-RPC transport is attached: the terminal must be faulted,
+        // never silently reported as successfully sent.
+        publisher.Publish(context, run);
+        var events = new List<StampedEvent>();
+        await WaitUntil(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "diagnostics.publish_faulted").Any();
+        }, "failed diagnostic transport terminal");
+
+        var attempt = Assert.Single(Named(events, "diagnostics.publish_attempt"));
+        var fault = Assert.Single(Named(events, "diagnostics.publish_faulted"));
+        Assert.Equal(context.AnalysisId, attempt.Event.AnalysisId);
+        Assert.Equal(context.AnalysisId, fault.Event.AnalysisId);
+        Assert.DoesNotContain(events, e =>
+            e.Event.Event is "diagnostics.publish_sent" or "diagnostics.clear_sent");
         AssertCatalogClean(observer);
     }
 

@@ -33,7 +33,7 @@ internal sealed class DiagnosticPublisher(
     /// diagnostic message or exception message is stored in the telemetry event.
     /// </summary>
     private void Emit(string eventCode, string outcome, string? reason = null,
-        IReadOnlyList<KeyValuePair<string, string>>? attributes = null)
+        IReadOnlyList<KeyValuePair<string, string>>? attributes = null, string? analysisId = null)
     {
         if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
             return;
@@ -46,11 +46,12 @@ internal sealed class DiagnosticPublisher(
             Priority = EventPriority.P1,
             Outcome = outcome,
             Reason = reason,
+            AnalysisId = analysisId,
             Attributes = attributes,
         });
     }
 
-    private void EmitDecision(string outcome, string? reason = null)
+    private void EmitDecision(string outcome, string? reason = null, string? analysisId = null)
     {
         if (!_observer.IsEnabled(CompilerEventKind.Decision, DiagnosticDetail.L0))
             return;
@@ -63,6 +64,7 @@ internal sealed class DiagnosticPublisher(
             Priority = EventPriority.P1,
             Outcome = outcome,
             Reason = reason,
+            AnalysisId = analysisId,
         });
     }
 
@@ -76,17 +78,19 @@ internal sealed class DiagnosticPublisher(
         }
 
         logger.Info($"[diag] publishing {total} diagnostic(s) across {payloads.Count} document(s).");
-        EmitDecision("publish");
+        EmitDecision("publish", analysisId: context.AnalysisId);
 
         // A successful enqueue is not a successful JSON-RPC notification. Each payload
         // reports its own terminal result from the per-URI transport lane.
         foreach (PublishDiagnosticsPayload payload in payloads)
         {
-            PublishPayload(payload, clear: payload.Diagnostics.Length == 0);
+            PublishPayload(payload, clear: payload.Diagnostics.Length == 0,
+                analysisId: context.AnalysisId);
         }
     }
 
-    private void PublishPayload(PublishDiagnosticsPayload payload, bool clear, string? reason = null)
+    private void PublishPayload(PublishDiagnosticsPayload payload, bool clear,
+        string? reason = null, string? analysisId = null)
     {
         // The disabled path stays as cheap as ordinary publication: no captured callback,
         // extra telemetry payload, or per-notification diagnostic allocation (§30, §59).
@@ -97,7 +101,8 @@ internal sealed class DiagnosticPublisher(
         }
 
         var diagnosticCount = payload.Diagnostics.Length;
-        Emit(PublishAttemptEvent, "attempted", reason, PayloadCount(diagnosticCount, 1));
+        Emit(PublishAttemptEvent, "attempted", reason, PayloadCount(diagnosticCount, 1),
+            analysisId);
         try
         {
             sink.Publish(payload, result =>
@@ -107,30 +112,32 @@ internal sealed class DiagnosticPublisher(
                     case DiagnosticPublicationState.TransportAccepted:
                         // "sent" is a completed JSON-RPC notification task, not a client ACK.
                         Emit(clear ? ClearSentEvent : PublishSentEvent,
-                            "sent", reason, PayloadCount(diagnosticCount, 1, result.Sequence));
+                            "sent", reason, PayloadCount(diagnosticCount, 1, result.Sequence),
+                            analysisId);
                         break;
 
                     case DiagnosticPublicationState.Faulted:
                         Emit(PublishFaultedEvent, "faulted",
                             result.Error?.GetType().Name ?? "transport_fault",
-                            PayloadCount(diagnosticCount, 1, result.Sequence));
+                            PayloadCount(diagnosticCount, 1, result.Sequence), analysisId);
                         break;
 
                     case DiagnosticPublicationState.Superseded:
                         Emit(DiagnosticsDiscardedEvent, "discarded", "publication_superseded",
-                            PayloadCount(diagnosticCount, 1, result.Sequence));
+                            PayloadCount(diagnosticCount, 1, result.Sequence), analysisId);
                         break;
 
                     case DiagnosticPublicationState.Cancelled:
                         Emit(DiagnosticsDiscardedEvent, "discarded", "publication_cancelled",
-                            PayloadCount(diagnosticCount, 1, result.Sequence));
+                            PayloadCount(diagnosticCount, 1, result.Sequence), analysisId);
                         break;
                 }
             });
         }
         catch (Exception ex)
         {
-            Emit(PublishFaultedEvent, "faulted", ex.GetType().Name, PayloadCount(diagnosticCount, 1));
+            Emit(PublishFaultedEvent, "faulted", ex.GetType().Name, PayloadCount(diagnosticCount, 1),
+                analysisId);
             throw;
         }
     }
