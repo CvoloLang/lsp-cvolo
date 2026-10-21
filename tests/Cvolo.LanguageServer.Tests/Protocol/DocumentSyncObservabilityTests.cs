@@ -106,7 +106,18 @@ public class DocumentSyncObservabilityTests : IDisposable
 
         await session.Client.NotifyDidOpenAsync(_workspace.DocumentUri("main.cvl"), "cvolo", 1, "int main() { return 0; }")
             .WithTimeout("didOpen");
-        Drain(queue);
+
+        // NotifyAsync finishes when the notification is written, not when the
+        // ordered input worker has applied it. Observe the real didOpen outcome.
+        var openedEvents = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(openedEvents);
+            return Named(openedEvents, "document.did_open").Any();
+        }, "didOpen applied before didChange");
+        var opened = Assert.Single(Named(openedEvents, "document.did_open"));
+        Assert.Equal("applied", opened.Event.Outcome);
+        Assert.Equal(1, opened.Event.DocumentVersion);
 
         await session.Client.NotifyDidChangeAsync(
                 _workspace.DocumentUri("main.cvl"),
@@ -117,9 +128,17 @@ public class DocumentSyncObservabilityTests : IDisposable
                     Text = "1",
                 })
             .WithTimeout("didChange");
-        await session.Client.WaitUntilAsync(() => queue.Count >= 3, "didChange events");
+        // Other RPC/worker events can satisfy queue.Count >= 3 before the edit
+        // runs. Retain every drained event and wait for the edit's own terminal.
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.did_change.applied").Any()
+                || Named(events, "document.did_change.rejected").Any();
+        }, "didChange applied or rejected");
 
-        var events = Drain(queue);
+        Assert.Empty(Named(events, "document.did_change.rejected"));
         var received = Assert.Single(Named(events, "document.did_change.received"));
         Assert.Equal("received", received.Event.Outcome);
         Assert.Equal(2, received.Event.DocumentVersion);
@@ -127,6 +146,8 @@ public class DocumentSyncObservabilityTests : IDisposable
         var applied = Assert.Single(Named(events, "document.did_change.applied"));
         Assert.Equal("applied", applied.Event.Outcome);
         Assert.Equal(2, applied.Event.DocumentVersion);
+        Assert.True(store.TryGet(DocumentUri.Create(_workspace.PathOf("main.cvl")), out var state));
+        Assert.Equal(2, state!.Version.Value);
 
         Assert.Contains(events, e => e.Event.Event == "diagnostics.scheduled");
     }

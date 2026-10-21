@@ -78,6 +78,8 @@ public class DiagnosticPipelineObservabilityTests
         // Use the real in-process JSON-RPC transport; an unattached sink must fault,
         // not claim that a diagnostic was sent.
         using var session = ProtocolSession.Start(new RecordingLspLogger(), observer: observer);
+        // A valid LSP session completes initialize before publishing diagnostics.
+        await session.Client.InitializeAsync().WithTimeout("initialize");
         var sink = session.Server.Diagnostics;
         var publisher = new DiagnosticPublisher(new RecordingLspLogger(), sink, observer);
 
@@ -108,6 +110,12 @@ public class DiagnosticPipelineObservabilityTests
                 || Named(events, "diagnostics.publish_faulted").Any();
         }, "JSON-RPC diagnostic publication terminal");
 
+        // The terminal observer callback and the byte recorder are independent
+        // async observers. Await actual complete wire framing, not a timing race.
+        await WaitUntil(
+            () => session.Server.GetServerFrames().Any(frame =>
+                frame.Contains("\"method\":\"textDocument/publishDiagnostics\"", StringComparison.Ordinal)),
+            "publishDiagnostics written to JSON-RPC wire");
         Assert.Contains(session.Server.GetServerFrames(),
             frame => frame.Contains("\"method\":\"textDocument/publishDiagnostics\"", StringComparison.Ordinal));
         Assert.Empty(Named(events, "diagnostics.publish_faulted"));

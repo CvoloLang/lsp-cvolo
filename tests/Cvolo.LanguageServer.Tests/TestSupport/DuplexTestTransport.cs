@@ -41,15 +41,31 @@ internal sealed class RecordingStream : Stream
     private readonly Stream _inner;
     private readonly MemoryStream _recorded = new();
     private readonly object _writeLock = new();
+    private readonly SemaphoreSlim _writeSemaphore = new(1, 1);
 
     public RecordingStream(Stream inner)
     {
         _inner = inner;
     }
 
-    public byte[] RecordedBytes => _recorded.ToArray();
+    public byte[] RecordedBytes
+    {
+        get
+        {
+            lock (_writeLock)
+            {
+                return _recorded.ToArray();
+            }
+        }
+    }
 
-    public void ResetRecording() => _recorded.SetLength(0);
+    public void ResetRecording()
+    {
+        lock (_writeLock)
+        {
+            _recorded.SetLength(0);
+        }
+    }
 
     public override bool CanRead => _inner.CanRead;
 
@@ -73,13 +89,43 @@ internal sealed class RecordingStream : Stream
 
     public override void Write(byte[] buffer, int offset, int count)
     {
-        // A StreamJsonRpc handler and raw frame writes (SendRawJson) can share
-        // one stream from different threads; serialize whole-frame writes so
-        // frames never interleave on the wire.
-        lock (_writeLock)
+        // Serialize synchronous and asynchronous writes through the same gate.
+        // Record only bytes successfully accepted by the underlying stream.
+        _writeSemaphore.Wait();
+        try
         {
-            _recorded.Write(buffer, offset, count);
             _inner.Write(buffer, offset, count);
+            lock (_writeLock)
+            {
+                _recorded.Write(buffer, offset, count);
+            }
+        }
+        finally
+        {
+            _writeSemaphore.Release();
+        }
+    }
+
+    public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        => WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+    public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        // StreamJsonRpc writes asynchronously. Inheriting Stream.WriteAsync gives
+        // the recorder no reliable async boundary and can make a real sent event
+        // observable before the test recorder contains the complete frame.
+        await _writeSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _inner.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+            lock (_writeLock)
+            {
+                _recorded.Write(buffer.Span);
+            }
+        }
+        finally
+        {
+            _writeSemaphore.Release();
         }
     }
 
