@@ -23,6 +23,12 @@ internal sealed class LspObservabilitySession : IDisposable
     private bool _writerStopped;
     private Task<int>? _pendingDrain;
     private bool _drainFaulted;
+    // Preserve writer counters across Start/Stop cycles. The queue and observer
+    // identity survive a writer restart, so checkpoint loss must survive too.
+    private long _previousWriterLost;
+    private long _previousWrittenLines;
+    private long _previousLastDurableSequence = -1;
+    private bool _previousWriterDegraded;
     private string? _writerOpenFailure;
     private int _stopped;
 
@@ -131,6 +137,14 @@ internal sealed class LspObservabilitySession : IDisposable
                         candidate.Dispose();
                         return new(false, false, "writer_open_failed");
                     }
+                    if (_writerStopped && _writer is not null)
+                    {
+                        _previousWriterLost += _writer.WriterLost;
+                        _previousWrittenLines += _writer.WrittenLines;
+                        _previousLastDurableSequence = Math.Max(
+                            _previousLastDurableSequence, _writer.LastDurableProducerSequence);
+                        _previousWriterDegraded |= _writer.IsDegraded;
+                    }
                     _writer = candidate;
                     _writerStopped = false;
                     _writerOpenFailure = null;
@@ -177,23 +191,34 @@ internal sealed class LspObservabilitySession : IDisposable
         lock (_gate)
         {
             FinishCompletedDrainLocked();
-            if (_options.OutputPath is null)
-                return new("collector_only", false, false, null);
-            if (_writerOpenFailure is not null && _writer is null)
-                return new("failed", false, true, null);
-            if (_writer is null)
-                return new("not_started", false, false, null);
-            if (_pendingDrain is not null)
-                return new("draining", false, true, _writer.LastDurableProducerSequence);
-
-            var degraded = _writer.IsDegraded || _drainFaulted;
-            var active = Observer.Mode != ObservabilityMode.Off && !degraded;
-            var status = degraded ? "degraded"
-                : active ? "active" : "idle";
-            return new(status, active,
-                degraded || _writer.ReplayIncomplete,
-                _writer.LastDurableProducerSequence);
+            return GetWriterStatusLocked();
         }
+    }
+
+    private RecordingWriterStatus GetWriterStatusLocked()
+    {
+        long writerLost = _previousWriterLost + (_writer?.WriterLost ?? 0);
+        long writtenLines = _previousWrittenLines + (_writer?.WrittenLines ?? 0);
+        long lastSequence = Math.Max(_previousLastDurableSequence,
+            _writer?.LastDurableProducerSequence ?? -1);
+        long? durableSequence = lastSequence >= 0 ? lastSequence : null;
+        bool degraded = _previousWriterDegraded || _drainFaulted ||
+            (_writer?.IsDegraded ?? false);
+
+        if (_options.OutputPath is null)
+            return new("collector_only", false, false, null, writerLost, writtenLines);
+        if (_writerOpenFailure is not null && _writer is null)
+            return new("failed", false, true, durableSequence, writerLost, writtenLines);
+        if (_writer is null)
+            return new("not_started", false, false, durableSequence, writerLost, writtenLines);
+        if (_pendingDrain is not null)
+            return new("draining", false, true, durableSequence, writerLost, writtenLines);
+
+        bool active = Observer.Mode != ObservabilityMode.Off && !degraded;
+        string state = degraded ? "degraded" : active ? "active" : "idle";
+        return new(state, active,
+            degraded || _writer.ReplayIncomplete || writerLost > 0,
+            durableSequence, writerLost, writtenLines);
     }
 
     private void FinishCompletedDrainLocked()
@@ -260,4 +285,5 @@ internal readonly record struct RecordingWriterTransition(
 
 internal readonly record struct RecordingWriterStatus(
     string State, bool DiskRecordingActive, bool ReplayIncomplete,
-    long? LastDurableProducerSequence);
+    long? LastDurableProducerSequence,
+    long WriterLost = 0, long WrittenLines = 0);

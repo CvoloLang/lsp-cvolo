@@ -157,6 +157,21 @@ public sealed class RecordingControlPlaneTests
             Assert.False((bool)stop["replayIncomplete"]!);
             Assert.True((long)stop["lastDurableProducerSequence"]! >= 0);
 
+            JObject checkpoint = await server.Client.GetRecordingCheckpointAsync();
+            Assert.Equal("idle", (string?)checkpoint["writerState"]);
+            Assert.True((bool)checkpoint["closedForInspection"]!);
+            Assert.False((bool)checkpoint["replayIncomplete"]!);
+            Assert.Empty((JArray)checkpoint["incompleteReasons"]!);
+            Assert.Equal(2, (long)checkpoint["recordingEpoch"]!);
+            Assert.True((long)checkpoint["lastDurableProducerSequence"]! >= 0);
+            Assert.True((long)checkpoint["writtenLines"]! > 0);
+            Assert.Equal(0, (long)checkpoint["droppedP0"]!);
+            Assert.Equal(0, (long)checkpoint["droppedP1"]!);
+            Assert.Equal(0, (long)checkpoint["droppedP2"]!);
+            Assert.Equal(0, (long)checkpoint["writerLost"]!);
+            Assert.False((bool)checkpoint["exportSupported"]!);
+            Assert.True(checkpoint["producerBarrierSequence"] is null or { Type: JTokenType.Null });
+
             string jsonl = File.ReadAllText(file);
             Assert.Contains("recording.mode_changed", jsonl, StringComparison.Ordinal);
             Assert.Contains("rpc.request.received", jsonl, StringComparison.Ordinal);
@@ -175,6 +190,14 @@ public sealed class RecordingControlPlaneTests
             Assert.Equal(4, (long)stoppedAgain["recordingEpoch"]!);
             Assert.Equal("idle", (string?)stoppedAgain["writerState"]);
             Assert.False((bool)stoppedAgain["replayIncomplete"]!);
+
+            JObject afterRestartCheckpoint = await server.Client.GetRecordingCheckpointAsync();
+            Assert.Equal(4, (long)afterRestartCheckpoint["recordingEpoch"]!);
+            Assert.True((long)afterRestartCheckpoint["writtenLines"]! >
+                (long)checkpoint["writtenLines"]!);
+            Assert.True((long)afterRestartCheckpoint["lastDurableProducerSequence"]! >=
+                (long)checkpoint["lastDurableProducerSequence"]!);
+            Assert.True((bool)afterRestartCheckpoint["closedForInspection"]!);
 
             string afterRestart = File.ReadAllText(file);
             Assert.True(afterRestart.Length > jsonl.Length);
@@ -212,6 +235,46 @@ public sealed class RecordingControlPlaneTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task Checkpoint_reports_queue_loss_even_without_an_exportable_disk_sink()
+    {
+        var queue = new BoundedEventQueue(1);
+        var observer = new CompilerObserver(
+            new ObservabilityOptions
+            {
+                Mode = ObservabilityMode.Off,
+                Emitter = "checkpoint-overflow-test",
+                QueueCapacity = 1,
+            },
+            queue: queue,
+            catalog: EventCatalog.CreateKernelCatalog());
+
+        using var server = ProtocolSession.Start(observer: observer);
+        await server.Client.InitializeAsync();
+        var eventRecord = new CompilerEvent
+        {
+            Event = "session.started",
+            Kind = CompilerEventKind.Lifecycle,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P0,
+        };
+        observer.EmitLifecycle(eventRecord);
+        observer.EmitLifecycle(eventRecord); // bounded P0 lane drops the second
+
+        JObject checkpoint = await server.Client.GetRecordingCheckpointAsync();
+        Assert.Equal(1, (long)checkpoint["droppedP0"]!);
+        Assert.Equal(0, (long)checkpoint["droppedP1"]!);
+        Assert.Equal(0, (long)checkpoint["droppedP2"]!);
+        Assert.Equal(1, (int)checkpoint["pendingEvents"]!);
+        Assert.True((bool)checkpoint["replayIncomplete"]!);
+        Assert.False((bool)checkpoint["closedForInspection"]!);
+        var reasons = ((JArray)checkpoint["incompleteReasons"]!).Values<string>().ToArray();
+        Assert.Contains("queue_loss", reasons);
+        Assert.Contains("no_disk_sink", reasons);
+        Assert.True(checkpoint["lastDurableProducerSequence"] is null or { Type: JTokenType.Null });
+        Assert.False((bool)checkpoint["exportSupported"]!);
     }
 
     [Fact]

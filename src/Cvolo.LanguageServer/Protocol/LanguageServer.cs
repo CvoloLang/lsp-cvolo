@@ -452,6 +452,7 @@ internal sealed class LanguageServer(
                         version = RecordingControlPlane.Version,
                         setRecording = RecordingControlPlane.SetMethod,
                         getStatus = RecordingControlPlane.StatusMethod,
+                        getCheckpoint = RecordingControlPlane.CheckpointMethod,
                         supportedModes = new[] { "off", "basic", "detailed" },
                         captureSourcesSupported = false,
                         exportSupported = false,
@@ -508,6 +509,10 @@ internal sealed class LanguageServer(
     /// <summary>Returns effective state; no mode change or implied persistence.</summary>
     [JsonRpcMethod(RecordingControlPlane.StatusMethod)]
     public RecordingPolicyStatus GetRecordingStatus() => RecordingControl.GetStatus();
+
+    /// <summary>Read-only checkpoint: no file capture and no export side effect.</summary>
+    [JsonRpcMethod(RecordingControlPlane.CheckpointMethod)]
+    public RecordingCheckpoint GetRecordingCheckpoint() => RecordingControl.GetCheckpoint();
 
     /// <summary>
     /// Applies an explicit mode request and returns the server-owned epoch.

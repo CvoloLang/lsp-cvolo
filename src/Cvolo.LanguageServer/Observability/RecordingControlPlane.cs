@@ -13,6 +13,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const int Version = 1;
     internal const string SetMethod = "cvolo/observability/setRecording.v1";
     internal const string StatusMethod = "cvolo/observability/status.v1";
+    internal const string CheckpointMethod = "cvolo/observability/checkpoint.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
@@ -43,6 +44,82 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
                 DiskRecordingActive: WriterStatus.DiskRecordingActive,
                 ReplayIncomplete: WriterStatus.ReplayIncomplete,
                 LastDurableProducerSequence: WriterStatus.LastDurableProducerSequence);
+        }
+    }
+
+    /// <summary>
+    /// Read-only, non-durable checkpoint. The last written producer sequence is
+    /// a watermark, NOT a gap-free sequence barrier. No trace files or paths
+    /// are returned to the client and this does not create an export bundle.
+    /// </summary>
+    internal RecordingCheckpoint GetCheckpoint()
+    {
+        lock (_gate)
+        {
+            var runtime = _runtime;
+            QueueStatistics? stats = runtime?.Queue.Statistics;
+            int pending = runtime?.Queue.Count ?? 0;
+            RecordingWriterStatus writer = WriterStatus;
+            var reasons = new List<string>();
+
+            if (runtime is null)
+                reasons.Add("observer_unavailable");
+            if (_session is null || writer.State == "collector_only")
+                reasons.Add("no_disk_sink");
+            if (writer.State == "not_started")
+                reasons.Add("writer_not_started");
+            if (writer.State == "failed")
+                reasons.Add("writer_open_failed");
+            if (writer.State == "degraded")
+                reasons.Add("writer_degraded");
+            if (writer.State == "draining")
+                reasons.Add("drain_in_progress");
+            if (runtime?.Mode != ObservabilityMode.Off)
+                reasons.Add("recording_active");
+            if (pending > 0)
+                reasons.Add("events_pending");
+            if (stats?.HasLoss == true)
+                reasons.Add("queue_loss");
+            if (writer.WriterLost > 0)
+                reasons.Add("writer_loss");
+            if (writer.ReplayIncomplete &&
+                !reasons.Contains("events_pending") &&
+                !reasons.Contains("writer_loss") &&
+                !reasons.Contains("writer_degraded") &&
+                !reasons.Contains("drain_in_progress"))
+                reasons.Add("writer_incomplete");
+            if (writer.LastDurableProducerSequence is null && _session is not null)
+                reasons.Add("no_durable_sequence");
+
+            // Snapshotting these counters does not perform a producer fence or
+            // validate the on-disk bytes. In particular a high watermark must
+            // never imply replay completeness without loss accounting.
+            bool closedForInspection = runtime?.Mode == ObservabilityMode.Off
+                && writer.State == "idle" && pending == 0;
+            return new RecordingCheckpoint(
+                Version,
+                DateTimeOffset.UtcNow,
+                runtime?.Identity.SessionId,
+                runtime?.Identity.ServerInstanceId,
+                runtime?.Identity.RecordingEpoch ?? 0,
+                runtime?.Mode.ToString().ToLowerInvariant() ?? "off",
+                writer.State,
+                writer.DiskRecordingActive,
+                closedForInspection,
+                ReplayIncomplete: reasons.Count > 0,
+                IncompleteReasons: reasons.ToArray(),
+                PendingEvents: pending,
+                EnqueuedEvents: stats?.Enqueued ?? 0,
+                DroppedP0: stats?.DroppedP0 ?? 0,
+                DroppedP1: stats?.DroppedP1 ?? 0,
+                DroppedP2: stats?.DroppedP2 ?? 0,
+                WriterLost: writer.WriterLost,
+                WrittenLines: writer.WrittenLines,
+                LastDurableProducerSequence: writer.LastDurableProducerSequence,
+                // Producer sequence barrier, integrity validation, durable
+                // fsync and export packaging are deliberately not implemented.
+                ProducerBarrierSequence: null,
+                ExportSupported: false);
         }
     }
 
@@ -174,3 +251,26 @@ internal sealed record RecordingPolicyAck(
     bool DiskRecordingActive,
     bool ReplayIncomplete,
     long? LastDurableProducerSequence);
+
+internal sealed record RecordingCheckpoint(
+    int ProtocolVersion,
+    DateTimeOffset CapturedAtUtc,
+    string? SessionId,
+    string? ServerInstanceId,
+    long RecordingEpoch,
+    string EffectiveMode,
+    string WriterState,
+    bool DiskRecordingActive,
+    bool ClosedForInspection,
+    bool ReplayIncomplete,
+    string[] IncompleteReasons,
+    int PendingEvents,
+    long EnqueuedEvents,
+    long DroppedP0,
+    long DroppedP1,
+    long DroppedP2,
+    long WriterLost,
+    long WrittenLines,
+    long? LastDurableProducerSequence,
+    long? ProducerBarrierSequence,
+    bool ExportSupported);
