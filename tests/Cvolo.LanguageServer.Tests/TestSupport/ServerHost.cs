@@ -10,6 +10,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
 using StreamJsonRpc;
+using StreamJsonRpc.Reflection;
 using LanguageServerImpl = Cvolo.LanguageServer.Protocol.LanguageServer;
 
 namespace Cvolo.LanguageServer.Tests.TestSupport;

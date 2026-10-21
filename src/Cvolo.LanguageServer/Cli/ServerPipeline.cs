@@ -10,6 +10,7 @@ using Cvolo.Observability.Abstractions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using StreamJsonRpc;
+using StreamJsonRpc.Reflection;
 using System.Reflection;
 using System.Runtime.Loader;
 
