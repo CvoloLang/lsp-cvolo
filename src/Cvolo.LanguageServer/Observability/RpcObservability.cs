@@ -15,8 +15,12 @@ namespace Cvolo.LanguageServer.Observability;
 /// here, never in a static singleton, so two server instances cannot share correlation state.
 /// Numeric and string ids stay distinct end to end.
 /// </summary>
-internal sealed class RpcObservability : IDisposable
+internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 {
+	// Async-flow-local correlation. No global map and no cross-request guessing.
+	private static readonly AsyncLocal<string?> RequestUidContext = new();
+	internal static string? CurrentRequestUid => RequestUidContext.Value;
+
 	private readonly ICompilerObserver _observer;
 	private readonly ConcurrentDictionary<string, string> _pendingRequestUids = new(StringComparer.Ordinal);
 	private string? _serverInstanceId;
@@ -123,6 +127,31 @@ internal sealed class RpcObservability : IDisposable
 		});
 	}
 
+	/// <summary>
+	/// The strategy is invoked for the actual inbound request by StreamJsonRpc.
+	/// An absent correlation stays absent; no inferred match by method or order.
+	/// </summary>
+	public IDisposable? ApplyInboundActivity(JsonRpcRequest request)
+	{
+		if (!Enabled || request.RequestId.IsEmpty
+			|| !_pendingRequestUids.TryGetValue(KeyOf(request.RequestId), out var requestUid))
+			return null;
+
+		var previous = RequestUidContext.Value;
+		RequestUidContext.Value = requestUid;
+		return new RequestScope(previous);
+	}
+
+	/// <summary>No outgoing JSON-RPC headers or protocol messages are modified.</summary>
+	public void ApplyOutboundActivity(JsonRpcRequest request)
+	{
+	}
+
+	private sealed class RequestScope(string? previous) : IDisposable
+	{
+		public void Dispose() => RequestUidContext.Value = previous;
+	}
+
 	/// <summary>Subscribes to response completion on the server's RPC instance.</summary>
 	public void Attach(JsonRpc rpc)
 	{
@@ -131,6 +160,7 @@ internal sealed class RpcObservability : IDisposable
 			return;
 
 		_rpc = rpc;
+		rpc.ActivityTracingStrategy = this;
 		if (rpc is IJsonRpcFormatterCallbacks callbacks)
 			callbacks.ResponseSent += OnResponseSent;
 	}

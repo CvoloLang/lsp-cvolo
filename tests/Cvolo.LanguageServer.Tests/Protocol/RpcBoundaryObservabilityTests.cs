@@ -244,6 +244,61 @@ public sealed class RpcBoundaryObservabilityTests
     }
 
     [Fact]
+    public async Task Concurrent_hover_and_definition_keep_their_actual_rpc_request_uids()
+    {
+        var (observer, queue) = CreateObserver();
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync();
+        Drain(queue);
+
+        // Valid URI, unopened document: no compiler/tooling dependency is needed
+        // to prove the two requests are distinguishable at both boundaries.
+        var uri = new Uri(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "obs-rpc-unopened.cvl")));
+        await Task.WhenAll(
+            session.Client.HoverAsync(uri, 0, 0),
+            session.Client.DefinitionAsync(uri, 0, 0));
+
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return events.Count(e => e.Event.Event == "rpc.response.sent") >= 2
+                && events.Any(e => e.Event.Event == "feature.request.started")
+                && events.Any(e => e.Event.Event == "request.started" && e.Event.Stage == "definition");
+        }, "two real feature requests and corresponding RPC responses");
+
+        var hoverRpc = Assert.Single(events, e =>
+            e.Event.Event == "rpc.request.received" && Attribute(e, "method") == "textDocument/hover");
+        var definitionRpc = Assert.Single(events, e =>
+            e.Event.Event == "rpc.request.received" && Attribute(e, "method") == "textDocument/definition");
+        Assert.NotNull(hoverRpc.Event.RequestUid);
+        Assert.NotNull(definitionRpc.Event.RequestUid);
+        Assert.NotEqual(hoverRpc.Event.RequestUid, definitionRpc.Event.RequestUid);
+
+        var hoverStart = Assert.Single(events, e =>
+            e.Event.Event == "feature.request.started" && e.Event.Stage == "hover");
+        var definitionStart = Assert.Single(events, e =>
+            e.Event.Event == "request.started" && e.Event.Stage == "definition");
+        Assert.Equal(hoverRpc.Event.RequestUid, hoverStart.Event.RequestUid);
+        Assert.Equal(definitionRpc.Event.RequestUid, definitionStart.Event.RequestUid);
+
+        var hoverEnd = Assert.Single(events, e =>
+            e.Event.Event == "feature.request.completed" && e.Event.Stage == "hover");
+        var definitionEnd = Assert.Single(events, e =>
+            e.Event.Event == "request.completed" && e.Event.Stage == "definition");
+        Assert.Equal(hoverStart.Event.OperationId, hoverEnd.Event.OperationId);
+        Assert.Equal(definitionStart.Event.OperationId, definitionEnd.Event.OperationId);
+        Assert.Equal(hoverRpc.Event.RequestUid, hoverEnd.Event.RequestUid);
+        Assert.Equal(definitionRpc.Event.RequestUid, definitionEnd.Event.RequestUid);
+        Assert.All(events.Where(e => e.Event.Event == "rpc.response.sent"), sent =>
+            Assert.Contains(events, received => received.Event.Event == "rpc.request.received"
+                && received.Event.RequestUid == sent.Event.RequestUid));
+
+        Assert.Equal(0, observer.Catalog!.UnknownEvents);
+        Assert.Equal(0, observer.Catalog!.MissingFields);
+    }
+
+    [Fact]
     public async Task Instrumentation_adds_no_bytes_to_the_protocol_stream()
     {
         var (observer, _) = CreateObserver();

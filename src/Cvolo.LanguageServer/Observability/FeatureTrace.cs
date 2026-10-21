@@ -22,6 +22,7 @@ internal sealed class FeatureTrace : IDisposable
     private readonly ICompilerObserver _observer;
     private readonly string _feature;
     private readonly IOperationScope _request;
+    private readonly string? _requestUid;
     private readonly CancellationToken _cancellationToken;
     private bool _completed;
 
@@ -29,11 +30,13 @@ internal sealed class FeatureTrace : IDisposable
         ICompilerObserver observer,
         string feature,
         IOperationScope request,
+        string? requestUid,
         CancellationToken cancellationToken)
     {
         _observer = observer;
         _feature = feature;
         _request = request;
+        _requestUid = requestUid;
         _cancellationToken = cancellationToken;
     }
 
@@ -46,11 +49,13 @@ internal sealed class FeatureTrace : IDisposable
     public static FeatureTrace Start(ICompilerObserver observer, string feature, CancellationToken cancellationToken = default)
     {
         if (!observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
-            return new FeatureTrace(observer, feature, NoopOperationScope.Instance, cancellationToken);
+            return new FeatureTrace(observer, feature, NoopOperationScope.Instance, null, cancellationToken);
 
+        var requestUid = RpcObservability.CurrentRequestUid;
         IOperationScope request = observer.BeginOperation(new OperationStart
         {
             Event = RequestStartedEvent,
+            RequestUid = requestUid,
             Stage = feature,
             Kind = CompilerEventKind.Phase,
             Detail = DiagnosticDetail.L0,
@@ -58,7 +63,7 @@ internal sealed class FeatureTrace : IDisposable
             Attributes = [new KeyValuePair<string, string>("feature", feature)],
         });
 
-        return new FeatureTrace(observer, feature, request, cancellationToken);
+        return new FeatureTrace(observer, feature, request, requestUid, cancellationToken);
     }
 
     /// <summary>Opens the backend lookup stage, linked to the request operation.</summary>
@@ -70,6 +75,7 @@ internal sealed class FeatureTrace : IDisposable
         return _observer.BeginOperation(new OperationStart
         {
             Event = BackendStartedEvent,
+            RequestUid = _requestUid,
             Stage = _feature,
             Kind = CompilerEventKind.Phase,
             Detail = DiagnosticDetail.L0,
@@ -97,6 +103,7 @@ internal sealed class FeatureTrace : IDisposable
         _observer.Emit(new CompilerEvent
         {
             Event = FreshnessCheckedEvent,
+            RequestUid = _requestUid,
             Stage = _feature,
             Kind = CompilerEventKind.Phase,
             Detail = DiagnosticDetail.L1,
@@ -116,6 +123,7 @@ internal sealed class FeatureTrace : IDisposable
         _observer.Emit(new CompilerEvent
         {
             Event = MappingRejectedEvent,
+            RequestUid = _requestUid,
             Stage = _feature,
             Kind = CompilerEventKind.Phase,
             Detail = DiagnosticDetail.L0,

@@ -3,6 +3,7 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
 using global::Cvolo.Observability.Abstractions;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
@@ -240,6 +241,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
         return _observer.BeginOperation(new OperationStart
         {
             Event = RequestStartedEvent,
+            RequestUid = RpcObservability.CurrentRequestUid,
             Stage = Stage,
             Kind = CompilerEventKind.Phase,
             Detail = DiagnosticDetail.L0,
@@ -255,6 +257,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
         return _observer.BeginOperation(new OperationStart
         {
             Event = eventCode,
+            RequestUid = RpcObservability.CurrentRequestUid,
             Stage = Stage,
             Kind = CompilerEventKind.Phase,
             Detail = DiagnosticDetail.L0,
@@ -294,6 +297,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
         _observer.Emit(new CompilerEvent
         {
             Event = "request.completed",
+            RequestUid = RpcObservability.CurrentRequestUid,
             Stage = Stage,
             Kind = CompilerEventKind.Phase,
             Detail = DiagnosticDetail.L0,
@@ -317,6 +321,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
         _observer.Emit(new CompilerEvent
         {
             Event = eventCode,
+            RequestUid = RpcObservability.CurrentRequestUid,
             Stage = Stage,
             Kind = CompilerEventKind.Phase,
             Detail = DiagnosticDetail.L0,
