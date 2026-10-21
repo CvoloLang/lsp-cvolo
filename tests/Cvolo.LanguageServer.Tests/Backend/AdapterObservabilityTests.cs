@@ -144,6 +144,50 @@ public sealed class AdapterObservabilityTests : IDisposable
     }
 
     [Fact]
+    public void Project_opened_with_recording_off_uses_the_same_Tooling_snapshot_after_activation()
+    {
+        (CompilerObserver observer, BoundedEventQueue queue) = CreateObserver(ObservabilityMode.Off);
+        var backend = new CvoloLanguageBackend(
+            [_workspace.DirectoryPath],
+            null,
+            new RecordingCoreLogger(),
+            observer: observer);
+
+        BackendProject project = backend.OpenProject(MainUri)!;
+        Assert.NotNull(project);
+        BackendSnapshot before = backend.CaptureCurrentSnapshot(project);
+        Assert.Null(before.SnapshotId);
+
+        var snapshotProperty = typeof(global::Cvolo.Compiler.Tooling.ProjectSnapshot)
+            .GetProperty("SnapshotId",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        Assert.NotNull(snapshotProperty);
+        var originalToolingSnapshot = Assert.IsType<ToolingBackendSnapshot>(before).Snapshot;
+        Assert.Null(snapshotProperty.GetValue(originalToolingSnapshot));
+        Assert.Empty(DrainQueue(queue));
+
+        observer.SetMode(ObservabilityMode.Detailed);
+
+        // The already-opened Tooling snapshot must not retain a frozen Noop
+        // observer. Identity is allocated only now, once, on real recording.
+        var toolingId = Assert.IsType<string>(snapshotProperty.GetValue(originalToolingSnapshot));
+        Assert.StartsWith("snap-", toolingId);
+        Assert.Equal(toolingId, before.SnapshotId);
+        Assert.Equal(toolingId, backend.CaptureCurrentSnapshot(project).SnapshotId);
+
+        observer.SetMode(ObservabilityMode.Off);
+        Assert.Equal(toolingId, before.SnapshotId);
+        Assert.Equal(toolingId, snapshotProperty.GetValue(originalToolingSnapshot));
+    }
+
+    private static List<StampedEvent> DrainQueue(BoundedEventQueue queue)
+    {
+        var events = new List<StampedEvent>();
+        queue.DrainAll(events);
+        return events;
+    }
+
+    [Fact]
     public void DisabledObservability_RecordsNothing_WhileDiscoveryStillWorks()
     {
         (CompilerObserver offObserver, BoundedEventQueue offQueue) = CreateObserver(ObservabilityMode.Off);

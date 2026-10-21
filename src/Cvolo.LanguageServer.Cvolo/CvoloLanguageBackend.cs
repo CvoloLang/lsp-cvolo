@@ -134,7 +134,7 @@ internal sealed partial class CvoloLanguageBackend(
     {
         var stopwatch = Stopwatch.StartNew();
         IReadOnlyList<PackageSourceDocument> sources = owner.Project.InitialSnapshot.GetPackageSources(source.PackageId, source.Version);
-        var workspace = CvoloWorkspace.Create();
+        var workspace = CvoloWorkspace.Create(_observer);
         var project = workspace.OpenPackageSource(owner.Project.ProjectPath, sources);
         _logger.Write(
             CoreLogLevel.Info,
@@ -626,7 +626,7 @@ internal sealed partial class CvoloLanguageBackend(
         var stopwatch = Stopwatch.StartNew();
         // The workspace builds the same semantic universe as the compiler (project sources,
         // standard library, ProjectReference sources and package/.cvlib API units).
-        var workspace = CvoloWorkspace.Create();
+        var workspace = CvoloWorkspace.Create(_observer);
         var project = looseWorkspace
             ? workspace.OpenProject(semanticRoot, _libraryPaths)
             : workspace.OpenProject(semanticRoot);
