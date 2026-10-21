@@ -161,12 +161,24 @@ public class DocumentSyncObservabilityTests : IDisposable
 
         var textUri = new Uri(Path.Combine(_workspace.DirectoryPath, "notes.txt"));
         await session.Client.NotifyDidOpenAsync(textUri, "plaintext", 1, "hello").WithTimeout("didOpen");
-        await session.Client.DrainNotificationsAsync().WithTimeout("drain");
 
-        var events = Drain(queue);
+        // An unrelated request/response barrier is not the didOpen terminal.
+        // Preserve earlier events while waiting for this document's actual
+        // unsupported-language rejection, even under Windows CI scheduling.
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.did_open").Any(
+                e => e.Event.Outcome == "rejected" &&
+                     e.Event.Reason == "unsupported_language");
+        }, "non-Cvolo didOpen rejected");
+
         var rejected = Assert.Single(Named(events, "document.did_open"));
         Assert.Equal("rejected", rejected.Event.Outcome);
         Assert.Equal("unsupported_language", rejected.Event.Reason);
+        Assert.Equal(1, rejected.Event.DocumentVersion);
+        Assert.False(session.Server.Store.TryGet(DocumentUri.Create(_workspace.PathOf("notes.txt")), out _));
         Assert.DoesNotContain(events, e => e.Event.Event == "diagnostics.scheduled");
     }
 

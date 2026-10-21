@@ -28,8 +28,11 @@ public class ProcessLifecycleTests
         // to start a freshly built self-contained server under parallel test
         // load. Keep the assertion that a dead client PID is rejected, while
         // allowing bounded startup time before receiving the error response.
-        JObject response = await server.WaitForResponseAsync(1)
-            .WithTimeout("initialize response", TimeSpan.FromSeconds(20));
+        // WaitForResponseAsync has its own five-second default timeout.
+        // Supply the intended CI startup allowance to that inner wait too,
+        // otherwise the outer 20-second guard never takes effect.
+        JObject response = await server.WaitForResponseAsync(1, TimeSpan.FromSeconds(20))
+            .WithTimeout("initialize response", TimeSpan.FromSeconds(25));
         Assert.Equal(-32602, response["error"]!["code"]!.Value<int>());
 
         var exitCode = await server.WaitForExitAsync().WithTimeout("server exit");

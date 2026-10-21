@@ -83,7 +83,9 @@ internal sealed class ServerProcess : IDisposable
         }
 
         throw new TimeoutException(
-            $"Timed out after {effective.TotalSeconds:0.#}s waiting for JSON-RPC response id {id}. stdout: {GetStdoutText()}");
+            $"Timed out after {effective.TotalSeconds:0.#}s waiting for JSON-RPC response id {id}. " +
+            $"hasExited={_process.HasExited}, " +
+            $"stdout: {GetStdoutText()}, stderr: {GetStderrText()}");
     }
 
     public async Task<int> WaitForExitAsync(TimeSpan? timeout = null)
