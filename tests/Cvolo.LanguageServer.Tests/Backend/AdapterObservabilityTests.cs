@@ -117,6 +117,33 @@ public sealed class AdapterObservabilityTests : IDisposable
     }
 
     [Fact]
+    public void Captured_snapshot_identity_matches_public_tooling_identity_when_available()
+    {
+        BackendProject project = _backend.OpenProject(MainUri)!;
+        BackendDocumentHandle handle = _backend.Resolve(project, MainUri);
+        BackendSnapshot captured = _backend.UpdateDocument(project, handle, Text + "\n");
+        var identityProperty = typeof(Cvolo.Compiler.Tooling.ProjectSnapshot)
+            .GetProperty("SnapshotId",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+        if (identityProperty is null)
+        {
+            // The pinned Tooling bundle predates the public API. It is incorrect
+            // to manufacture an id from generation or the object address.
+            Assert.Null(captured.SnapshotId);
+            return;
+        }
+
+        Assert.IsType<ToolingBackendSnapshot>(captured);
+        var tooling = ((ToolingBackendSnapshot)captured).Snapshot;
+        var expected = Assert.IsType<string>(identityProperty.GetValue(tooling));
+        Assert.False(string.IsNullOrWhiteSpace(expected));
+        Assert.Equal(expected, captured.SnapshotId);
+        Assert.Equal(expected, _backend.CaptureCurrentSnapshot(project).SnapshotId);
+        AssertCatalogClean();
+    }
+
+    [Fact]
     public void DisabledObservability_RecordsNothing_WhileDiscoveryStillWorks()
     {
         (CompilerObserver offObserver, BoundedEventQueue offQueue) = CreateObserver(ObservabilityMode.Off);

@@ -1391,6 +1391,16 @@ internal sealed class ToolingBackendSnapshot(ProjectSnapshot snapshot, long gene
     public ProjectSnapshot Snapshot { get; } = snapshot;
 
     public long Generation { get; } = generation;
+
+    // Tooling bundles published before the public identity API lack this
+    // property. Read it only when the actual pinned assembly exposes it;
+    // never substitute the adapter generation or generate a synthetic id.
+    private static readonly System.Reflection.PropertyInfo? SnapshotIdentityProperty =
+        typeof(ProjectSnapshot).GetProperty("SnapshotId",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+    public override string? SnapshotId =>
+        SnapshotIdentityProperty?.GetValue(Snapshot) as string;
 }
 
 /// <summary>
