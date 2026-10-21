@@ -8,6 +8,8 @@ using Cvolo.LanguageServer.Core.Logging;
 using Cvolo.LanguageServer.Core.Scheduling;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
+using global::Cvolo.Observability.Abstractions;
 
 namespace Cvolo.LanguageServer.Core;
 
@@ -18,10 +20,31 @@ namespace Cvolo.LanguageServer.Core;
 /// same document are serialized on a per-uri gate; different documents are
 /// independent.
 /// </summary>
-internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logger = null, ServerMetrics? metrics = null)
+internal sealed class DocumentStore(
+    ILanguageBackend backend,
+    ICoreLogger? logger = null,
+    ServerMetrics? metrics = null,
+    ICompilerObserver? observer = null)
 {
+    private const string DocumentUpdateReceivedEvent = "document.update.received";
+    private const string DocumentUpdateAppliedEvent = "document.update.applied";
+    private const string DocumentUpdateRejectedEvent = "document.update.rejected";
+    private const string SnapshotCaptureStartedEvent = "snapshot.capture.started";
+    private const string SnapshotCaptureCompletedEvent = "snapshot.capture.completed";
+    private const string SnapshotFreshnessCheckedEvent = "snapshot.freshness_checked";
+
+    private const string CaptureKindRequest = "request";
+    private const string CaptureKindSemanticEdit = "semantic_edit";
+    private const string CaptureKindDiagnosticRun = "diagnostic_run";
+
+    private const string CaptureOutcomeSuccess = "success";
+    private const string CaptureOutcomeNotFound = "not_found";
+    private const string FreshnessOutcomeFresh = "fresh";
+    private const string FreshnessOutcomeStale = "stale";
+
     private readonly ICoreLogger _logger = logger ?? new NullCoreLogger();
     private readonly ServerMetrics? _metrics = metrics;
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private readonly ConcurrentDictionary<DocumentUri, DocumentEntry> _documents = new();
     private readonly ConcurrentDictionary<DocumentUri, object> _gates = new();
     private readonly SemaphoreSlim _interactiveQueryGate = new(1, 1);
@@ -39,7 +62,84 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
             _logger.Write(CoreLogLevel.Debug, $"[perf] {operation} took {stopwatch.ElapsedMilliseconds} ms: {detail}");
     }
 
+    /// <summary>
+    /// Emits one document-update event when observability is enabled. Emitting only enqueues a
+    /// small immutable record; serialization happens later on the writer thread, so this never
+    /// performs I/O or formatting while a store lock is held.
+    /// </summary>
+    private void EmitUpdate(string eventCode, string outcome, string? reason, int version)
+    {
+        if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
+            return;
+
+        _observer.Emit(new CompilerEvent
+        {
+            Event = eventCode,
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P1,
+            Outcome = outcome,
+            Reason = reason,
+            DocumentVersion = version,
+        });
+    }
+
     public ICollection<DocumentUri> OpenUris => _documents.Keys;
+
+    /// <summary>
+    /// Emits the start half of a snapshot-capture span. The operation id pairs this event with the
+    /// matching completion emitted by <see cref="EmitCaptureCompleted"/>.
+    /// </summary>
+    private IOperationScope EmitCaptureStarted(string captureKind, int version)
+    {
+        if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
+            return NoopOperationScope.Instance;
+
+        return _observer.BeginOperation(new OperationStart
+        {
+            Event = SnapshotCaptureStartedEvent,
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P1,
+            Attributes = new[] { new KeyValuePair<string, string>("captureKind", captureKind) },
+            DocumentVersion = version,
+        });
+    }
+
+    /// <summary>Emits the completion half of a snapshot-capture span with a machine outcome.</summary>
+    private void EmitCaptureCompleted(IOperationScope scope, string captureKind, string outcome, DocumentVersion version)
+    {
+        if (ReferenceEquals(scope, NoopOperationScope.Instance))
+            return;
+
+        scope.Complete(
+            outcome,
+            attributes: new[]
+            {
+                new KeyValuePair<string, string>("captureKind", captureKind),
+                new KeyValuePair<string, string>("documentVersion", version.Value.ToString(CultureInfo.InvariantCulture)),
+            });
+    }
+
+    /// <summary>
+    /// Emits one freshness-check event. Freshness runs on every publication path, so the event is
+    /// L1 detail and never carries reasons beyond the fresh/stale outcome.
+    /// </summary>
+    private void EmitFreshnessChecked(string outcome, long? version)
+    {
+        if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L1))
+            return;
+
+        _observer.Emit(new CompilerEvent
+        {
+            Event = SnapshotFreshnessCheckedEvent,
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L1,
+            Priority = EventPriority.P2,
+            Outcome = outcome,
+            DocumentVersion = version,
+        });
+    }
 
     private IInputBarrier? _inputBarrier;
 
@@ -158,6 +258,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     public DocumentState? ApplyChanges(DocumentUri uri, int version, IReadOnlyList<DocumentChange> changes)
     {
         var stopwatch = Stopwatch.StartNew();
+        EmitUpdate(DocumentUpdateReceivedEvent, "received", null, version);
         var gate = _gates.GetOrAdd(uri, static _ => new object());
         lock (gate)
         {
@@ -174,6 +275,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                 if (!_documents.TryGetValue(uri, out DocumentEntry? current))
                 {
                     _logger.Write(CoreLogLevel.Warning, $"didChange for unopened document '{uri}' ignored.");
+                    EmitUpdate(DocumentUpdateRejectedEvent, "rejected", "document_not_open", version);
                     return null;
                 }
 
@@ -181,6 +283,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                 if (version <= currentState.Version.Value)
                 {
                     _logger.Write(CoreLogLevel.Warning, $"Stale didChange v{version} for '{uri}' (current v{currentState.Version.Value}) ignored.");
+                    EmitUpdate(DocumentUpdateRejectedEvent, "rejected", "stale_version", version);
                     return null;
                 }
 
@@ -192,6 +295,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
             if (!IncrementalTextEditor.TryApplyChanges(currentState.Text, changes, out string newText))
             {
                 _logger.Write(CoreLogLevel.Warning, $"Invalid range in didChange v{version} for '{uri}'; nothing applied.");
+                EmitUpdate(DocumentUpdateRejectedEvent, "rejected", "invalid_change", version);
                 return null;
             }
 
@@ -211,6 +315,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                 {
                     _logger.Write(CoreLogLevel.Debug, $"Discarded didChange v{version} for '{uri}': revision advanced during advance.");
                     _metrics?.RecordPublicationGateHold(publishWatch.ElapsedTicks);
+                    EmitUpdate(DocumentUpdateRejectedEvent, "rejected", "revision_advanced", version);
                     return null;
                 }
 
@@ -226,6 +331,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                 _metrics?.RecordSnapshotAdvance();
                 _metrics?.RecordPublicationGateHold(publishWatch.ElapsedTicks);
                 LogTiming("DocumentStore.ApplyChanges", stopwatch, $"uri='{uri}', version={version}, changes={changes.Count}, textLength={newText.Length}", 50);
+                EmitUpdate(DocumentUpdateAppliedEvent, "applied", null, version);
                 return next;
             }
         }
@@ -297,6 +403,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public bool TryCapture(DocumentUri uri, out SemanticRequestContext context)
     {
+        IOperationScope capture = EmitCaptureStarted(CaptureKindRequest, 0);
         var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
@@ -314,12 +421,15 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
                     current.Project,
                     currentProjectSnapshot);
                 LogTiming("DocumentStore.TryCapture", stopwatch, $"uri='{uri}', version={state.Version}, textLength={state.Text.Length}", 50);
+                EmitCaptureCompleted(capture, CaptureKindRequest, CaptureOutcomeSuccess, state.Version);
                 return true;
             }
 
             context = default;
-            return false;
         }
+
+        EmitCaptureCompleted(capture, CaptureKindRequest, CaptureOutcomeNotFound, default);
+        return false;
     }
 
     /// <summary>
@@ -328,12 +438,14 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public bool TryCaptureSemanticEdit(DocumentUri uri, out SemanticEditRequestContext context)
     {
+        IOperationScope capture = EmitCaptureStarted(CaptureKindSemanticEdit, 0);
         var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
             if (!_documents.TryGetValue(uri, out DocumentEntry? current))
             {
                 context = null!;
+                EmitCaptureCompleted(capture, CaptureKindSemanticEdit, CaptureOutcomeNotFound, default);
                 return false;
             }
 
@@ -363,6 +475,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
 
             context = new SemanticEditRequestContext(semantic, open);
             LogTiming("DocumentStore.TryCaptureSemanticEdit", stopwatch, $"uri='{uri}', version={state.Version}, openDocuments={open.Count}", 100);
+            EmitCaptureCompleted(capture, CaptureKindSemanticEdit, CaptureOutcomeSuccess, state.Version);
             return true;
         }
     }
@@ -399,6 +512,7 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public bool TryCaptureDiagnosticRun(BackendProject project, out DiagnosticRunContext context)
     {
+        IOperationScope capture = EmitCaptureStarted(CaptureKindDiagnosticRun, 0);
         var stopwatch = Stopwatch.StartNew();
         lock (_publicationGate)
         {
@@ -417,7 +531,13 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
 
             context = new DiagnosticRunContext(project, snapshot, targets);
             LogTiming("DocumentStore.TryCaptureDiagnosticRun", stopwatch, $"targets={targets.Count}", 100);
-            return targets.Count > 0;
+            bool captured = targets.Count > 0;
+            EmitCaptureCompleted(
+                capture,
+                CaptureKindDiagnosticRun,
+                captured ? CaptureOutcomeSuccess : CaptureOutcomeNotFound,
+                default);
+            return captured;
         }
     }
 
@@ -441,6 +561,12 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public bool IsCurrent(DocumentUri uri, DocumentSessionId sessionId, DocumentVersion version, BackendProject project)
     {
+        bool current = IsCurrentCore(uri, sessionId, version, project);
+        EmitFreshnessChecked(current ? FreshnessOutcomeFresh : FreshnessOutcomeStale, version.Value);
+        return current;    }
+
+    private bool IsCurrentCore(DocumentUri uri, DocumentSessionId sessionId, DocumentVersion version, BackendProject project)
+    {
         return _documents.TryGetValue(uri, out DocumentEntry? entry)
             && entry.State.SessionId == sessionId
             && entry.State.Version == version
@@ -450,7 +576,9 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// <summary>Delegates the project-generation check to the backend.</summary>
     public bool IsCurrentSnapshot(BackendProject project, BackendSnapshot snapshot)
     {
-        return backend.IsCurrentSnapshot(project, snapshot);
+        bool current = backend.IsCurrentSnapshot(project, snapshot);
+        EmitFreshnessChecked(current ? FreshnessOutcomeFresh : FreshnessOutcomeStale, null);
+        return current;
     }
 
     /// <summary>
@@ -462,9 +590,12 @@ internal sealed class DocumentStore(ILanguageBackend backend, ICoreLogger? logge
     /// </summary>
     public bool IsCurrent(SemanticRequestContext context)
     {
-        return IsCurrent(context.Uri, context.SessionId, context.Version, context.Project)
+        // Uses the non-emitting core so one whole-context check emits exactly one
+        // freshness event instead of one per condition.
+        bool current = IsCurrentCore(context.Uri, context.SessionId, context.Version, context.Project)
             && backend.IsCurrentSnapshot(context.Project, context.CurrentProjectSnapshot);
-    }
+        EmitFreshnessChecked(current ? FreshnessOutcomeFresh : FreshnessOutcomeStale, context.Version.Value);
+        return current;    }
 
     /// <summary>
     /// Runs one expensive interactive compiler query at a time and drops stale requests before they

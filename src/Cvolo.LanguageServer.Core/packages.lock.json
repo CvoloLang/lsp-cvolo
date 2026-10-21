@@ -1,7 +1,11 @@
 {
   "version": 2,
   "dependencies": {
-    "net10.0": {},
+    "net10.0": {
+      "cvolo.observability.abstractions": {
+        "type": "Project"
+      }
+    },
     "net10.0/linux-arm64": {},
     "net10.0/linux-x64": {},
     "net10.0/osx-arm64": {},

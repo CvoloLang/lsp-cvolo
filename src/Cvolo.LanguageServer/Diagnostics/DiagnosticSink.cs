@@ -72,11 +72,16 @@ internal sealed class DiagnosticSink(ILspLogger? logger = null)
         }
     }
 
-    public void Publish(PublishDiagnosticsPayload parameters)
+    /// <summary>
+    /// Queues a notification without blocking its caller. The optional callback is invoked
+    /// once when the JSON-RPC send task succeeds, faults, or the queued publication is
+    /// superseded without sending. Success does not assert client delivery/acknowledgement.
+    /// </summary>
+    public void Publish(PublishDiagnosticsPayload parameters, Action<DiagnosticPublicationResult>? onCompleted = null)
     {
         ArgumentNullException.ThrowIfNull(parameters);
         UriPublicationLane lane = _lanes.GetOrAdd(parameters.Uri, _ => new UriPublicationLane(SendAsync, OnLaneFault));
-        lane.Enqueue(parameters);
+        lane.Enqueue(parameters, onCompleted);
     }
 
     private void OnLaneFault(Exception ex)
@@ -94,20 +99,22 @@ internal sealed class DiagnosticSink(ILspLogger? logger = null)
 
         if (rpc is null)
         {
-            _logger.Warning("[diag] publishDiagnostics requested before the JSON-RPC channel was attached; notification dropped.");
-            return Task.CompletedTask;
+            const string message = "publishDiagnostics requested before the JSON-RPC channel was attached";
+            _logger.Warning($"[diag] {message}; notification dropped.");
+            // The lane must see a failure, not a successfully completed task.
+            return Task.FromException(new InvalidOperationException(message));
         }
 
         try
         {
             Task notification = rpc.NotifyWithParameterObjectAsync(Methods.TextDocumentPublishDiagnosticsName, payload);
-            _logger.Debug($"[diag] sent publishDiagnostics #{sequence} for {payload.Uri} ({payload.Diagnostics.Length} diagnostic(s)).");
+            _logger.Debug($"[diag] queued publishDiagnostics #{sequence} for {payload.Uri} ({payload.Diagnostics.Length} diagnostic(s)).");
             return notification;
         }
         catch (Exception ex)
         {
-            _logger.Warning($"Publishing diagnostics failed: {ex.Message}");
-            return Task.CompletedTask;
+            // The lane owns fault reporting. Never claim a successful notification here.
+            return Task.FromException(ex);
         }
     }
 

@@ -3,7 +3,9 @@ using Cvolo.LanguageServer.Core.Scheduling;
 using Cvolo.LanguageServer.Cli;
 using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
 using Cvolo.LanguageServer.Protocol;
+using Cvolo.Observability.Abstractions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
@@ -20,12 +22,19 @@ namespace Cvolo.LanguageServer.Tests.TestSupport;
 internal sealed class ServerHost : IDisposable
 {
     private readonly HeaderDelimitedMessageHandler _handler;
+    private readonly RpcObservability _observability;
     private readonly JsonRpc _rpc;
     private readonly LanguageServerImpl _server;
     private readonly RecordingStream _serverOutput;
     private bool _disposed;
 
     public TerminationRequest Termination { get; }
+
+    /// <summary>Boundary observer shared with the hosted server, for trace assertions.</summary>
+    public RpcObservability Observability => _observability;
+
+    /// <summary>The observer the hosted server was created with.</summary>
+    public ICompilerObserver Observer => _server.Observer;
 
     /// <summary>Test-only view of whether the hosted server accepted 'initialized'.</summary>
     public bool InitializedReceived => _server.InitializedReceived;
@@ -36,28 +45,31 @@ internal sealed class ServerHost : IDisposable
     /// <summary>The diagnostic notification sink used by the hosted server.</summary>
     public DiagnosticSink Diagnostics => _server.Diagnostics;
 
-    private ServerHost(JsonRpc rpc, LanguageServerImpl server, HeaderDelimitedMessageHandler handler, RecordingStream serverOutput, TerminationRequest termination)
+    private ServerHost(JsonRpc rpc, LanguageServerImpl server, HeaderDelimitedMessageHandler handler, RpcObservability observability, RecordingStream serverOutput, TerminationRequest termination)
     {
         _rpc = rpc;
         _server = server;
         _handler = handler;
+        _observability = observability;
         _serverOutput = serverOutput;
         Termination = termination;
     }
 
-    public static ServerHost Start(DuplexTestTransport transport, ILspLogger? logger = null, IClientProcessWatcher? watcher = null, Action<JsonRpc>? configureRpc = null, Func<DocumentStore>? storeFactory = null)
+    public static ServerHost Start(DuplexTestTransport transport, ILspLogger? logger = null, IClientProcessWatcher? watcher = null, Action<JsonRpc>? configureRpc = null, Func<DocumentStore>? storeFactory = null, ICompilerObserver? observer = null)
     {
         TerminationRequest termination = new();
-        LanguageServerImpl server = new(termination, logger ?? new NullLspLogger(), watcher ?? new FakeClientProcessWatcher(), storeFactory);
+        LanguageServerImpl server = new(termination, logger ?? new NullLspLogger(), watcher ?? new FakeClientProcessWatcher(), storeFactory, observer);
         RecordingStream serverOutput = new(transport.ServerOutput);
         JsonMessageFormatter formatter = new();
         formatter.JsonSerializer.ContractResolver = new CamelCasePropertyNamesContractResolver();
         formatter.JsonSerializer.NullValueHandling = NullValueHandling.Ignore;
         formatter.JsonSerializer.Converters.Add(new UriJsonConverter());
-        HeaderDelimitedMessageHandler handler = new(serverOutput, transport.ServerInput, formatter);
+        RpcObservability rpcObservability = new(server.Observer);
+        HeaderDelimitedMessageHandler handler = new ObservedHeaderDelimitedHandler(serverOutput, transport.ServerInput, formatter, rpcObservability);
         IngressPipeline ingress = new();
         server.Ingress = ingress;
         JsonRpc rpc = new(handler);
+        rpcObservability.Attach(rpc);
         rpc.SynchronizationContext = new IngressSynchronizationContext(ingress);
         server.Diagnostics.Attach(rpc);
         server.Refresh.Attach(rpc);
@@ -89,7 +101,7 @@ internal sealed class ServerHost : IDisposable
         configureRpc?.Invoke(rpc);
         rpc.StartListening();
 
-        return new ServerHost(rpc, server, handler, serverOutput, termination);
+        return new ServerHost(rpc, server, handler, rpcObservability, serverOutput, termination);
     }
 
     private static void AddTarget(JsonRpc rpc, object target)
@@ -151,5 +163,6 @@ internal sealed class ServerHost : IDisposable
         _rpc.Dispose();
         _server.Dispose();
         _handler.DisposeAsync().GetAwaiter().GetResult();
+        _observability.Dispose();
     }
 }

@@ -3,6 +3,8 @@ using Cvolo.LanguageServer.Core.Completion;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
+using global::Cvolo.Observability.Abstractions;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using System.Diagnostics;
@@ -27,11 +29,13 @@ internal sealed class CompletionHandler(
     Func<string[]> resolveProperties,
     Func<bool> documentationMarkdown,
     Func<CompletionResolveStore> resolveStoreAccessor,
-    Func<bool>? insertArgumentPlaceholders = null)
+    Func<bool>? insertArgumentPlaceholders = null,
+    ICompilerObserver? observer = null)
 {
     private const int CompletionQuietPeriodMs = 120;
     private const int CompletionMaxAutomaticTextLength = 100_000;
 
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private DocumentStore? _store;
     private CompletionResolveStore? _resolveStore;
 
@@ -45,9 +49,12 @@ internal sealed class CompletionHandler(
     public async Task<CompletionList?> Completion(CompletionParams? parameters, CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
+        using var trace = FeatureTrace.Start(_observer, "completion", cancellationToken);
+
         if (parameters?.TextDocument is not { } textDocument)
         {
             logger.Debug("[completion] request without a textDocument; ignored.");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
 
@@ -57,12 +64,14 @@ internal sealed class CompletionHandler(
         if (!TextDocumentSyncHandler.TryCreateDocumentUri(textDocument.Uri, out DocumentUri documentUri))
         {
             logger.Debug($"[completion] non-file document '{textDocument.Uri}' ignored.");
+            trace.Complete("unsupported", "unsupported_uri");
             return null;
         }
 
         if (!TextDocumentSyncHandler.IsCvoloDocument(documentUri))
         {
             logger.Debug($"[completion] non-cvolo document '{documentUri}' ignored.");
+            trace.Complete("unsupported", "unsupported_uri");
             return null;
         }
 
@@ -73,6 +82,7 @@ internal sealed class CompletionHandler(
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[completion] '{documentUri}' is not open; no completion.");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
 
@@ -82,6 +92,7 @@ internal sealed class CompletionHandler(
         if (context.Document.Text.Length > CompletionMaxAutomaticTextLength && !IsExplicitInvocation(parameters))
         {
             logger.Warning($"[perf] completion skipped for large document auto-trigger: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={CompletionMaxAutomaticTextLength}, triggerKind={parameters.Context?.TriggerKind}");
+            trace.Complete("unavailable", "resource_limit");
             return EmptyCompletionList();
         }
 
@@ -91,6 +102,7 @@ internal sealed class CompletionHandler(
         if (!index.TryGetOffset(new TextPosition(position.Line, position.Character), out int offset))
         {
             logger.Debug($"[completion] invalid request position {position.Line}:{position.Character} for '{documentUri}'.");
+            trace.Complete("not_found", "invalid_position");
             return null;
         }
 
@@ -100,10 +112,13 @@ internal sealed class CompletionHandler(
         if (!Store.IsCurrent(context))
         {
             logger.Debug($"[completion] skipped stale request after quiet period for '{documentUri}'.");
+            trace.Freshness(fresh: false);
+            trace.Complete("stale_discarded", "document_version_stale");
             return null;
         }
 
         BackendCompletionResult? result;
+        IOperationScope backend = trace.Backend();
         try
         {
             // Run the (synchronous) semantic query off the JSON-RPC receive loop so
@@ -114,10 +129,13 @@ internal sealed class CompletionHandler(
                 () => Store.GetCompletions(context, offset),
                 cancellationToken).ConfigureAwait(false);
             LogTiming("backend", stopwatch, documentUri);
+            trace.CompleteBackend(backend, "completed");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[completion] backend failure uri='{documentUri}' v{context.Version} offset={offset} elapsed={stopwatch.ElapsedMilliseconds}ms: {ex}");
+            logger.Warning($"[completion] backend failure uri='{documentUri}' v{context.Version} offset={offset} elapsed={stopwatch.ElapsedMilliseconds}ms: {ex.GetType().Name}");
+            trace.CompleteBackend(backend, "faulted", "exception");
+            trace.Complete("faulted", "exception");
             return null;
         }
 
@@ -126,20 +144,27 @@ internal sealed class CompletionHandler(
         if (result is null)
         {
             logger.Debug($"[completion] skipped stale request for '{documentUri}'.");
+            trace.Complete("stale_discarded", "document_version_stale");
             return null;
         }
 
         if (!Store.IsCurrent(context))
         {
             logger.Debug($"[completion] discarded stale result for '{documentUri}'.");
+            trace.Freshness(fresh: false);
+            trace.Complete("stale_discarded", "document_version_stale");
             return null;
         }
 
+        trace.Freshness(fresh: true);
         logger.Debug($"[completion] backend returned {result.Items.Count} candidate(s) for '{documentUri}'.");
 
         MappedCompletion mapped = Map(result, index, offset, context.Document.Text.Length, context);
         if (mapped.List is null)
+        {
+            trace.Complete("not_found", "symbol_lookup_miss");
             return null;
+        }
 
         // Staged batch commit: only now, after the final freshness gate, are resolve entries
         // atomically committed and their opaque data tokens attached (§27.3, §34). Everything
@@ -152,6 +177,7 @@ internal sealed class CompletionHandler(
         }
 
         LogTiming("total", stopwatch, documentUri);
+        trace.Complete("success");
         return mapped.List;
     }
 
@@ -177,33 +203,50 @@ internal sealed class CompletionHandler(
     [JsonRpcMethod("completionItem/resolve", UseSingleObjectParameterDeserialization = true)]
     public async Task<CompletionItem?> Resolve(CompletionItem? item, CancellationToken cancellationToken)
     {
+        using var trace = FeatureTrace.Start(_observer, "completion.resolve", cancellationToken);
+
         // Unknown or malformed data tokens are left untouched: no reconstruction, no failure (§27.4).
         if (item is null || item.Data is not string token)
+        {
+            trace.Complete("not_found", "target_not_captured");
             return item;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         if (!ResolveStore.TryGet(token, out CompletionResolveEntry entry))
+        {
+            trace.Complete("not_found", "target_not_captured");
             return item;
+        }
 
         BackendCompletionResolvableFields sessionEffective = entry.EffectiveResolvableFields & ClientResolvableFields();
         if (sessionEffective == BackendCompletionResolvableFields.None)
+        {
+            trace.Complete("not_found", "symbol_lookup_miss");
             return item;
+        }
 
         // Early freshness: an entry whose document or project snapshot has moved on is evicted.
         if (!Store.IsCurrent(entry.Context))
         {
             ResolveStore.Evict(token);
+            trace.Freshness(fresh: false);
+            trace.Complete("stale_discarded", "document_version_stale");
             return item;
         }
 
         BackendCompletionResolvedInfo? resolved;
+        IOperationScope backend = trace.Backend();
         try
         {
             resolved = await Task.Run(() => Store.ResolveCompletion(entry.Context, entry.Handle), cancellationToken).ConfigureAwait(false);
+            trace.CompleteBackend(backend, "completed");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[completionItem/resolve] backend failure: {ex.Message}");
+            logger.Warning($"[completionItem/resolve] backend failure: {ex.GetType().Name}");
+            trace.CompleteBackend(backend, "faulted", "exception");
+            trace.Complete("faulted", "exception");
             return item;
         }
 
@@ -213,11 +256,17 @@ internal sealed class CompletionHandler(
         if (!Store.IsCurrent(entry.Context))
         {
             ResolveStore.Evict(token);
+            trace.Freshness(fresh: false);
+            trace.Complete("stale_discarded", "document_version_stale");
             return item;
         }
 
+        trace.Freshness(fresh: true);
         if (resolved is null)
+        {
+            trace.Complete("not_found", "symbol_lookup_miss");
             return item;
+        }
 
         // Only the stored effective fields may change; label, text edit, insert format and range
         // are immutable (§25, §33).
@@ -232,6 +281,7 @@ internal sealed class CompletionHandler(
             };
         }
 
+        trace.Complete("success");
         return item;
     }
 

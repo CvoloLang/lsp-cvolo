@@ -1,3 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <ItemGroup>
+    <!--
+      Interim cross-repo source reference: the observability contracts currently live in the
+      compiler repository and are not yet part of the pinned tooling bundle. Replace with the
+      bundled assemblies (and manifest version checks) once the tooling release ships them.
+    -->
+    <ProjectReference Include="..\..\..\Cvolo\src\Cvolo.Observability.Abstractions\Cvolo.Observability.Abstractions.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -3,6 +3,8 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
+using global::Cvolo.Observability.Abstractions;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using System.Diagnostics;
@@ -19,8 +21,10 @@ internal sealed class SemanticTokensHandler(
     Func<DocumentStore> storeAccessor,
     Func<string[]> tokenTypesAccessor,
     Func<string[]> tokenModifiersAccessor,
-    Func<int> maxInteractiveTextLengthAccessor)
+    Func<int> maxInteractiveTextLengthAccessor,
+    ICompilerObserver? observer = null)
 {
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private DocumentStore? _store;
 
     private DocumentStore Store => _store ??= storeAccessor();
@@ -29,9 +33,12 @@ internal sealed class SemanticTokensHandler(
     public async Task<SemanticTokensResponse?> SemanticTokensFull(SemanticTokensParams? parameters, CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
+        using var trace = FeatureTrace.Start(_observer, "semanticTokens", cancellationToken);
+
         if (parameters?.TextDocument is not { } textDocument)
         {
             logger.Debug("[semanticTokens] request without a textDocument; ignored.");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
 
@@ -39,6 +46,7 @@ internal sealed class SemanticTokensHandler(
             || !TextDocumentSyncHandler.IsCvoloDocument(documentUri))
         {
             logger.Debug($"[semanticTokens] non-cvolo document '{textDocument.Uri}' ignored.");
+            trace.Complete("unsupported", "unsupported_uri");
             return null;
         }
 
@@ -49,6 +57,7 @@ internal sealed class SemanticTokensHandler(
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[semanticTokens] '{documentUri}' is not open; no tokens.");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
         LogTiming("capture", stopwatch, documentUri);
@@ -59,6 +68,7 @@ internal sealed class SemanticTokensHandler(
             // An oversized document is a resource denial, not proof that a nonempty document has
             // zero semantic tokens: return a typed non-success, never a successful empty array.
             logger.Info($"[perf] semanticTokens refused for large document: uri='{documentUri}', textLength={context.Document.Text.Length}, limit={maxInteractiveTextLength}");
+            trace.Complete("unavailable", "resource_limit");
             throw TypedError(
                 "Semantic tokens are unavailable for this document because it exceeds the interactive resource budget.",
                 CvoloErrorData.BackendUnavailable,
@@ -67,6 +77,7 @@ internal sealed class SemanticTokensHandler(
         }
 
         BackendSemanticTokenResult? result;
+        IOperationScope backend = trace.Backend();
         try
         {
             result = await Store.RunInteractiveQueryAsync(
@@ -75,13 +86,16 @@ internal sealed class SemanticTokensHandler(
                 () => Store.GetSemanticTokens(context),
                 cancellationToken).ConfigureAwait(false);
             LogTiming("backend", stopwatch, documentUri);
+            trace.CompleteBackend(backend, "completed");
         }
         // A typed ContentModified (or any other LocalRpcException) already carries the protocol
         // error the client must see; never re-wrap it as a backend RequestFailed.
         catch (Exception ex) when (ex is not OperationCanceledException and not LocalRpcException)
         {
             // Never publish the exception text: it may embed source. The type is enough to trace.
-            logger.Warning($"[semanticTokens] backend failure for '{documentUri}': {ex}");
+            logger.Warning($"[semanticTokens] backend failure for '{documentUri}': {ex.GetType().Name}");
+            trace.CompleteBackend(backend, "faulted", "exception");
+            trace.Complete("faulted", "exception");
             throw TypedError(
                 "The compiler backend failed while computing semantic tokens.",
                 CvoloErrorData.BackendUnavailable,
@@ -94,6 +108,7 @@ internal sealed class SemanticTokensHandler(
         if (result is null)
         {
             logger.Debug($"[semanticTokens] superseded request for '{documentUri}'; no tokens.");
+            trace.Complete("stale_discarded", "document_version_stale");
             throw ContentModified(
                 "The semantic token request was superseded by newer document input.");
         }
@@ -108,13 +123,17 @@ internal sealed class SemanticTokensHandler(
         if (!Store.IsCurrent(context))
         {
             logger.Debug($"[semanticTokens] result no longer current for '{documentUri}'; discarded.");
+            trace.Freshness(fresh: false);
+            trace.Complete("stale_discarded", "document_version_stale");
             throw ContentModified(
                 "The semantic token result is no longer valid for the current document.");
         }
 
+        trace.Freshness(fresh: true);
         logger.Info($"[semanticTokens] {documentUri}: {data.Length / 5} token(s).");
         LogTiming("total", stopwatch, documentUri);
         LogTokenBreakdown(documentUri, context.Document.Version, result);
+        trace.Complete("success");
         return new SemanticTokensResponse(data);
     }
 

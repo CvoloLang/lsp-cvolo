@@ -3,6 +3,8 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
+using global::Cvolo.Observability.Abstractions;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
@@ -10,32 +12,48 @@ using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
 namespace Cvolo.LanguageServer.Protocol;
 
 /// <summary>Project-semantic textDocument/references handler.</summary>
-internal sealed class ReferencesHandler(ILspLogger logger, Func<DocumentStore> storeAccessor)
+internal sealed class ReferencesHandler(ILspLogger logger, Func<DocumentStore> storeAccessor, ICompilerObserver? observer = null)
 {
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private DocumentStore? _store;
     private DocumentStore Store => _store ??= storeAccessor();
 
     [JsonRpcMethod("textDocument/references", UseSingleObjectParameterDeserialization = true)]
     public async Task<Location[]?> References(ReferenceParamsPayload? parameters, CancellationToken cancellationToken)
     {
+        using var trace = FeatureTrace.Start(_observer, "references", cancellationToken);
+
         if (parameters?.TextDocument is not { } textDocument || parameters.Position is not { } position)
+        {
+            trace.Complete("not_found", "document_not_open");
             return null;
+        }
 
         if (!TextDocumentSyncHandler.TryCreateDocumentUri(textDocument.Uri, out DocumentUri documentUri)
             || !TextDocumentSyncHandler.IsCvoloDocument(documentUri))
+        {
+            trace.Complete("unsupported", "unsupported_uri");
             return null;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         await RequestBarrier.WaitAsync(Store, cancellationToken);
 
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
+        {
+            trace.Complete("not_found", "document_not_open");
             return null;
+        }
 
         var sourceIndex = new LineIndex(context.Document.Text);
         if (!sourceIndex.TryGetOffset(new TextPosition(position.Line, position.Character), out int offset))
+        {
+            trace.Complete("not_found", "invalid_position");
             return null;
+        }
 
         BackendReferenceResult? result;
+        IOperationScope backend = trace.Backend();
         try
         {
             result = await Task.Run(() =>
@@ -45,10 +63,13 @@ internal sealed class ReferencesHandler(ILspLogger logger, Func<DocumentStore> s
                     ? null
                     : Store.GetReferences(context.CurrentProjectSnapshot, symbol.Symbol, parameters.Context?.IncludeDeclaration == true);
             }, cancellationToken).ConfigureAwait(false);
+            trace.CompleteBackend(backend, "completed");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[references] backend failure for '{documentUri}': {ex.Message}");
+            logger.Warning($"[references] backend failure for '{documentUri}': {ex.GetType().Name}");
+            trace.CompleteBackend(backend, "faulted", "exception");
+            trace.Complete("faulted", "exception");
             return null;
         }
 
@@ -58,9 +79,14 @@ internal sealed class ReferencesHandler(ILspLogger logger, Func<DocumentStore> s
         if (!Store.IsCurrent(context))
         {
             logger.Debug($"[references] discarded stale result for '{documentUri}'.");
+            trace.Freshness(fresh: false);
+            trace.Complete("stale_discarded", "document_version_stale");
             return null;
         }
 
+        trace.Freshness(fresh: true);
+        trace.Complete(mapped is null || mapped.Length == 0 ? "not_found" : "success",
+            mapped is null || mapped.Length == 0 ? "symbol_lookup_miss" : null);
         return mapped;
     }
 

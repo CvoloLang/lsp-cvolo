@@ -7,6 +7,7 @@ using Cvolo.LanguageServer.Logging;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using StreamJsonRpc.Protocol;
+using global::Cvolo.Observability.Abstractions;
 
 namespace Cvolo.LanguageServer.Protocol;
 
@@ -19,9 +20,35 @@ internal sealed class LanguageServer(
     TerminationRequest termination,
     ILspLogger logger,
     IClientProcessWatcher clientWatcher,
-    Func<DocumentStore>? storeFactory = null) : IDisposable
+    Func<DocumentStore>? storeFactory = null,
+    ICompilerObserver? observer = null) : IDisposable
 {
     private const string QuickFixKind = "quickfix";
+
+    /// <summary>
+    /// Session-scoped observer. Defaults to the shared no-op observer so standalone hosts and
+    /// unit tests keep working without any telemetry runtime (§29.4, §30).
+    /// </summary>
+    internal ICompilerObserver Observer { get; } = observer ?? NoopCompilerObserver.Instance;
+
+    private const string LspStage = "lifecycle";
+
+    private void EmitLsp(string eventCode, string outcome, string? reason = null)
+    {
+        if (!Observer.IsEnabled(CompilerEventKind.Lifecycle, DiagnosticDetail.L0))
+            return;
+
+        Observer.Emit(new CompilerEvent
+        {
+            Event = eventCode,
+            Stage = LspStage,
+            Kind = CompilerEventKind.Lifecycle,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P1,
+            Outcome = outcome,
+            Reason = reason,
+        });
+    }
 
     private readonly SessionState _state = new();
     private readonly DiagnosticSink _diagnostics = new(logger);
@@ -140,7 +167,8 @@ internal sealed class LanguageServer(
             _diagnostics,
             () => Store,
             null,
-            () => Ingress?.Inputs));
+            () => Ingress?.Inputs,
+            Observer));
 
     /// <summary>
     /// Session-scoped, bounded store of completion-resolve entries guarding opaque data tokens.
@@ -159,7 +187,8 @@ internal sealed class LanguageServer(
             () => _state.CompletionResolveSupportProperties!,
             () => _state.CompletionDocumentationMarkdown,
             () => ResolveStore,
-            () => _state.EditorIntelligence.InsertArgumentPlaceholders));
+            () => _state.EditorIntelligence.InsertArgumentPlaceholders,
+            Observer));
 
     /// <summary>textDocument/signatureHelp handler.</summary>
     internal SignatureHelpHandler SignatureHelp => GetOrCreate(
@@ -168,17 +197,18 @@ internal sealed class LanguageServer(
             logger,
             () => Store,
             () => _state.SignatureHelpLabelOffsetSupport,
-            () => _state.SignatureHelpActiveParameterSupport));
+            () => _state.SignatureHelpActiveParameterSupport,
+            Observer));
 
     /// <summary>
     /// textDocument/hover handler.
     /// </summary>
-    internal HoverHandler Hover => GetOrCreate(ref _hover, () => new HoverHandler(logger, () => Store, () => _state.HoverPrefersMarkdown));
+    internal HoverHandler Hover => GetOrCreate(ref _hover, () => new HoverHandler(logger, () => Store, () => _state.HoverPrefersMarkdown, Observer));
 
     /// <summary>
     /// textDocument/definition handler.
     /// </summary>
-    internal DefinitionHandler Definition => GetOrCreate(ref _definition, () => new DefinitionHandler(logger, () => Store));
+    internal DefinitionHandler Definition => GetOrCreate(ref _definition, () => new DefinitionHandler(logger, () => Store, Observer));
 
     internal TypeDefinitionHandler TypeDefinition => GetOrCreate(ref _typeDefinition, () => new TypeDefinitionHandler(logger, () => Store));
 
@@ -198,13 +228,13 @@ internal sealed class LanguageServer(
     /// <summary>
     /// textDocument/semanticTokens/full handler.
     /// </summary>
-    internal SemanticTokensHandler SemanticTokens => GetOrCreate(ref _semanticTokens, () => new SemanticTokensHandler(logger, () => Store, () => _state.SemanticTokenTypes, () => _state.SemanticTokenModifiers, () => _state.SemanticTokens.MaxInteractiveTextLength));
+    internal SemanticTokensHandler SemanticTokens => GetOrCreate(ref _semanticTokens, () => new SemanticTokensHandler(logger, () => Store, () => _state.SemanticTokenTypes, () => _state.SemanticTokenModifiers, () => _state.SemanticTokens.MaxInteractiveTextLength, Observer));
 
     /// <summary>textDocument/references handler.</summary>
-    internal ReferencesHandler References => GetOrCreate(ref _references, () => new ReferencesHandler(logger, () => Store));
+    internal ReferencesHandler References => GetOrCreate(ref _references, () => new ReferencesHandler(logger, () => Store, Observer));
 
     /// <summary>textDocument/prepareRename and textDocument/rename handler.</summary>
-    internal RenameHandler Rename => GetOrCreate(ref _rename, () => new RenameHandler(logger, () => Store, () => _state.DocumentChangesSupported));
+    internal RenameHandler Rename => GetOrCreate(ref _rename, () => new RenameHandler(logger, () => Store, () => _state.DocumentChangesSupported, Observer));
 
     /// <summary>Session-scoped, bounded store of lazy code-action resolve entries.</summary>
     internal CodeActionResolveStore CodeActionResolveStore => GetOrCreate(ref _codeActionResolveStore, () => new CodeActionResolveStore());
@@ -242,7 +272,7 @@ internal sealed class LanguageServer(
             () => _state.AnchoredLensSupported));
 
     /// <summary>textDocument/inlayHint handler.</summary>
-    internal InlayHintHandler InlayHints => GetOrCreate(ref _inlayHints, () => new InlayHintHandler(logger, () => Store, () => _state.EditorIntelligence));
+    internal InlayHintHandler InlayHints => GetOrCreate(ref _inlayHints, () => new InlayHintHandler(logger, () => Store, () => _state.EditorIntelligence, Observer));
 
     /// <summary>textDocument/documentHighlight handler.</summary>
     internal DocumentHighlightHandler DocumentHighlights => GetOrCreate(ref _documentHighlights, () => new DocumentHighlightHandler(logger, () => Store));
@@ -270,7 +300,8 @@ internal sealed class LanguageServer(
         () => new ConfigurationHandler(
             logger,
             settings => _state.TryApplyConfiguration(settings),
-            () => EditorIntelligenceRefresh.RequestRefresh()));
+            () => EditorIntelligenceRefresh.RequestRefresh(),
+            Observer));
 
     /// <summary>
     /// Server-to-client CodeLens and inlay-hint refresh coordinator. A refresh follows a concrete
@@ -352,6 +383,7 @@ internal sealed class LanguageServer(
         _diagnostics.SetVersionSupported(
             initializeParams.Capabilities?.TextDocument?.PublishDiagnostics?.VersionSupport == true);
         logger.Info("Client initialized.");
+        EmitLsp("capabilities.negotiated", "negotiated");
 
         return new InitializeResponse(
             new ServerCapabilities
@@ -459,6 +491,7 @@ internal sealed class LanguageServer(
 
         _state.MarkInitialized();
         logger.Info("initialized notification received.");
+        EmitLsp("client.initialized", "initialized");
     }
 
     [JsonRpcMethod("$/setTrace", UseSingleObjectParameterDeserialization = true)]
@@ -498,9 +531,10 @@ internal sealed class LanguageServer(
 
         CoreLoggerBridge coreLogger = new(logger);
         return new DocumentStore(
-            new CvoloLanguageBackend(folders, root, coreLogger, libraryPaths, _serverMetrics),
+            new CvoloLanguageBackend(folders, root, coreLogger, libraryPaths, _serverMetrics, Observer),
             coreLogger,
-            _serverMetrics);
+            _serverMetrics,
+            Observer);
     }
 
     private void OnClientTerminated()

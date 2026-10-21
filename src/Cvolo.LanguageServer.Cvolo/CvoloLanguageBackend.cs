@@ -11,6 +11,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using CoreTextSpan = Cvolo.LanguageServer.Core.Diagnostics.TextSpan;
 using ToolingTextSpan = Cvolo.Compiler.Tooling.TextSpan;
+using global::Cvolo.Observability.Abstractions;
 
 namespace Cvolo.LanguageServer.Cvolo;
 
@@ -25,13 +26,35 @@ internal sealed partial class CvoloLanguageBackend(
     string? fallbackRoot,
     ICoreLogger? logger = null,
     IReadOnlyList<string>? libraryPaths = null,
-    ServerMetrics? metrics = null) : ILanguageBackend
+    ServerMetrics? metrics = null,
+    ICompilerObserver? observer = null) : ILanguageBackend
 {
     private readonly ICoreLogger _logger = logger ?? new NullCoreLogger();
     private readonly string? _fallbackRoot = fallbackRoot;
     private readonly IReadOnlyList<string> _libraryPaths = libraryPaths ?? Array.Empty<string>();
     private readonly ServerMetrics? _metrics = metrics;
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private readonly ConcurrentDictionary<string, CvoloProjectSession> _sessions = new();
+
+    private const string AdapterStage = "adapter";
+
+    private void EmitAdapter(string eventCode, string outcome, string? reason = null, string? generationId = null)
+    {
+        if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
+            return;
+
+        _observer.Emit(new CompilerEvent
+        {
+            Event = eventCode,
+            Stage = AdapterStage,
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P2,
+            Outcome = outcome,
+            Reason = reason,
+            GenerationId = generationId,
+        });
+    }
 
     private void LogTiming(string operation, Stopwatch stopwatch, string detail, int thresholdMs = 50)
     {
@@ -56,12 +79,14 @@ internal sealed partial class CvoloLanguageBackend(
         if (discovery.Status == ProjectDiscoveryStatus.AmbiguousProject)
         {
             _logger.Write(CoreLogLevel.Warning, $"Ambiguous project for '{document}': '{discovery.ProjectDirectory}' contains more than one .cvlproj.");
+            EmitAdapter("project.discovered", "not_found", "ambiguous_project");
             return null;
         }
 
         if (discovery.ProjectDirectory is null)
         {
             _logger.Write(CoreLogLevel.Warning, $"No filesystem root could be selected for '{document}'.");
+            EmitAdapter("project.discovered", "not_found", "no_root");
             return null;
         }
 
@@ -77,6 +102,7 @@ internal sealed partial class CvoloLanguageBackend(
                 _ => CreateSession(root, discovery.Status == ProjectDiscoveryStatus.LooseWorkspace));
 
             CvoloProjectSession result = CreatePackageSession(projectSession, document.LocalPath) ?? projectSession;
+            EmitAdapter("project.discovered", "discovered", null, result.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
             LogTiming("OpenProject", stopwatch, $"document='{document.LocalPath}', root='{root}', status={discovery.Status}, documents={result.Current.Documents.Count}, generation={result.Generation}", 100);
             return result;
         }
@@ -84,6 +110,7 @@ internal sealed partial class CvoloLanguageBackend(
         {
             var mode = discovery.Status == ProjectDiscoveryStatus.LooseWorkspace ? "loose workspace" : "Cvolo project";
             _logger.Write(CoreLogLevel.Error, $"Opening {mode} '{root}' failed: {ex.Message}");
+            EmitAdapter("project.discovered", "not_found", "open_failed");
             return null;
         }
     }
@@ -97,7 +124,10 @@ internal sealed partial class CvoloLanguageBackend(
 
         var packageKey = "package:" + owner.Project.ProjectPath + ":" + source.PackageId + ":" + source.Version;
 
-        return _sessions.GetOrAdd(packageKey, _ => BuildPackageSession(owner, source));
+        bool existing = _sessions.ContainsKey(packageKey);
+        CvoloProjectSession session = _sessions.GetOrAdd(packageKey, _ => BuildPackageSession(owner, source));
+        EmitAdapter("package_session.opened", existing ? "existing" : "opened");
+        return session;
     }
 
     private CvoloProjectSession BuildPackageSession(CvoloProjectSession owner, PackageSourceDocument source)
@@ -110,12 +140,11 @@ internal sealed partial class CvoloLanguageBackend(
             CoreLogLevel.Info,
             $"Opened package source session '{source.PackageId}@{source.Version}' for '{owner.Project.ProjectPath}'.");
         LogTiming("BuildPackageSession", stopwatch, $"package='{source.PackageId}@{source.Version}', sources={sources.Count}, owner='{owner.Project.ProjectPath}'", 100);
-        return new CvoloProjectSession(workspace, project, isPackageSource: true)
+        return new CvoloProjectSession(workspace, project, isPackageSource: true, observer: _observer)
         {
             Analysis = new GenerationAnalysisRegistry(_metrics),
         };
     }
-
     private bool TryFindOwningSession(string path, out CvoloProjectSession session)
     {
         foreach (var candidate in _sessions.Values)
@@ -138,6 +167,7 @@ internal sealed partial class CvoloLanguageBackend(
         if (session.Project.TryGetDocumentId(document.LocalPath, out DocumentId documentId))
         {
             handle = new CvoloDocumentHandle(documentId);
+            EmitAdapter("document.resolve.completed", "resolved");
             LogTiming("TryResolveDocument", stopwatch, $"document='{document.LocalPath}', project='{session.Project.ProjectPath}', refreshed=false", 50);
             return true;
         }
@@ -147,11 +177,13 @@ internal sealed partial class CvoloLanguageBackend(
             && session.Project.TryGetDocumentId(document.LocalPath, out documentId))
         {
             handle = new CvoloDocumentHandle(documentId);
+            EmitAdapter("document.resolve.completed", "refreshed");
             LogTiming("TryResolveDocument", stopwatch, $"document='{document.LocalPath}', project='{session.Project.ProjectPath}', refreshed=true", 50);
             return true;
         }
 
         _logger.Write(CoreLogLevel.Error, $"Document '{document}' is not part of project '{session.Project.ProjectPath}'.");
+        EmitAdapter("document.resolve.completed", "not_found", "not_in_project");
         handle = null!;
         return false;
     }
@@ -313,12 +345,14 @@ internal sealed partial class CvoloLanguageBackend(
         {
             CvoloProject advanced = session.Project.Advance(overrides);
             session.SetProject(advanced);
+            EmitAdapter("snapshot.advance.fallback", "fallback", "capture_unavailable");
             LogTiming("ComputeImportClosure", stopwatch, $"file='{filePath}', overrides={overrides.Count}, documents={advanced.InitialSnapshot.Documents.Count}", 100);
             return advanced.InitialSnapshot;
         }
         catch (Exception ex)
         {
             _logger.Write(CoreLogLevel.Warning, $"Import closure refresh failed for '{filePath}': {ex.Message}");
+            EmitAdapter("snapshot.advance.fallback", "fallback", "import_closure_failed");
             return session.Current.WithDocument(documentId, SourceText.From(text));
         }
     }
@@ -602,7 +636,7 @@ internal sealed partial class CvoloLanguageBackend(
                 ? $"Opened loose Cvolo workspace '{semanticRoot}' with {_libraryPaths.Count} configured library path(s)."
                 : $"Opened Cvolo project '{semanticRoot}' from .cvlproj package/project metadata.");
         LogTiming("CreateSession", stopwatch, $"root='{semanticRoot}', loose={looseWorkspace}, documents={project.InitialSnapshot.Documents.Count}", 100);
-        return new CvoloProjectSession(workspace, project)
+        return new CvoloProjectSession(workspace, project, observer: _observer)
         {
             Analysis = new GenerationAnalysisRegistry(_metrics),
         };
@@ -1224,12 +1258,14 @@ internal sealed partial class CvoloLanguageBackend(
 internal sealed class CvoloProjectSession : BackendProject
 {
     private readonly Dictionary<DocumentId, SourceText> _diskBaselines;
+    private readonly ICompilerObserver _observer;
 
-    public CvoloProjectSession(CvoloWorkspace workspace, CvoloProject project, bool isPackageSource = false)
+    public CvoloProjectSession(CvoloWorkspace workspace, CvoloProject project, bool isPackageSource = false, ICompilerObserver? observer = null)
     {
         Workspace = workspace;
         Project = project;
         IsPackageSource = isPackageSource;
+        _observer = observer ?? NoopCompilerObserver.Instance;
         Current = project.InitialSnapshot;
         _diskBaselines = project.InitialSnapshot.Documents
             .ToDictionary(pair => pair.Key, pair => pair.Value.Text);
@@ -1305,6 +1341,7 @@ internal sealed class CvoloProjectSession : BackendProject
     /// </summary>
     public void Advance(ProjectSnapshot snapshot)
     {
+        EmitAdvance(snapshot, Generation + 1);
         Current = snapshot;
         Generation++;
         Analysis?.Request(snapshot, Generation);
@@ -1316,9 +1353,28 @@ internal sealed class CvoloProjectSession : BackendProject
     /// </summary>
     public void CommitStaged(ProjectSnapshot snapshot, long generation)
     {
+        EmitAdvance(snapshot, generation);
         Current = snapshot;
         Generation = generation;
         Analysis?.Request(snapshot, Generation);
+    }
+
+    private void EmitAdvance(ProjectSnapshot snapshot, long generation)
+    {
+        if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
+            return;
+
+        var generationId = generation.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _observer.Emit(new CompilerEvent
+        {
+            Event = "generation.changed",
+            Stage = "adapter",
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P2,
+            Outcome = "changed",
+            GenerationId = generationId,
+        });
     }
 }
 

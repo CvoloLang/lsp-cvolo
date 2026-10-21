@@ -3,6 +3,8 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
+using global::Cvolo.Observability.Abstractions;
 using StreamJsonRpc;
 using System.Diagnostics;
 
@@ -18,8 +20,10 @@ internal sealed class SignatureHelpHandler(
     ILspLogger logger,
     Func<DocumentStore> storeAccessor,
     Func<bool> labelOffsetSupport,
-    Func<bool> activeParameterSupport)
+    Func<bool> activeParameterSupport,
+    ICompilerObserver? observer = null)
 {
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private DocumentStore? _store;
     private DocumentStore Store => _store ??= storeAccessor();
 
@@ -27,15 +31,21 @@ internal sealed class SignatureHelpHandler(
     public async Task<SignatureHelpResponse?> SignatureHelp(SignatureHelpParams? parameters, CancellationToken cancellationToken)
     {
         var timer = Stopwatch.StartNew();
+        using var trace = FeatureTrace.Start(_observer, "signatureHelp", cancellationToken);
+
         if (parameters?.TextDocument is not { } textDocument || parameters.Position is not { } position)
         {
             logger.Debug("[signatureHelp] missing document or position");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
 
         if (!TextDocumentSyncHandler.TryCreateDocumentUri(textDocument.Uri, out DocumentUri documentUri)
             || !TextDocumentSyncHandler.IsCvoloDocument(documentUri))
+        {
+            trace.Complete("unsupported", "unsupported_uri");
             return null;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         await RequestBarrier.WaitAsync(Store, cancellationToken);
@@ -43,38 +53,63 @@ internal sealed class SignatureHelpHandler(
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[signatureHelp] no captured snapshot uri='{documentUri}'");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
 
         var index = new LineIndex(context.Document.Text);
         if (!index.TryGetOffset(new TextPosition(position.Line, position.Character), out int offset))
+        {
+            trace.Complete("not_found", "invalid_position");
             return null;
+        }
 
         logger.Debug($"[signatureHelp] start uri='{documentUri}' v{context.Version} position={position.Line}:{position.Character} offset={offset}");
         BackendSignatureHelpResult? result;
+        IOperationScope backend = trace.Backend();
         try
         {
             result = await Task.Run(() => Store.GetSignatureHelp(context, offset), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[signatureHelp] backend failure uri='{documentUri}' v{context.Version} offset={offset} elapsed={timer.ElapsedMilliseconds}ms: {ex}");
+            logger.Warning($"[signatureHelp] backend failure uri='{documentUri}' v{context.Version} offset={offset} elapsed={timer.ElapsedMilliseconds}ms: {ex.GetType().Name}");
+            trace.CompleteBackend(backend, "faulted", "exception");
+            trace.Complete("faulted", "exception");
             return null;
         }
+
+        trace.CompleteBackend(backend, "completed");
 
         cancellationToken.ThrowIfCancellationRequested();
         if (!Store.IsCurrent(context))
         {
             logger.Debug($"[signatureHelp] stale snapshot uri='{documentUri}' v{context.Version} elapsed={timer.ElapsedMilliseconds}ms");
+            trace.Freshness(false);
+            trace.Complete("stale_discarded", "document_version_stale");
             return null;
         }
+
+        trace.Freshness(true);
+
         if (result is null)
         {
             logger.Debug($"[signatureHelp] compiler returned null uri='{documentUri}' v{context.Version} offset={offset} elapsed={timer.ElapsedMilliseconds}ms");
+            trace.Complete("not_found", "symbol_lookup_miss");
             return null;
         }
+
         var mapped = Map(result);
-        logger.Debug($"[signatureHelp] end uri='{documentUri}' v{context.Version} status={(mapped is null ? "invalid" : "ok")} signatures={result.Signatures.Count} elapsed={timer.ElapsedMilliseconds}ms");
+        if (mapped is null)
+        {
+            logger.Debug($"[signatureHelp] discarded malformed result uri='{documentUri}' v{context.Version} offset={offset}");
+            trace.MappingRejected("invalid_target_span");
+            trace.Complete("not_found", "invalid_target_span");
+            return null;
+        }
+
+        logger.Debug($"[signatureHelp] end uri='{documentUri}' v{context.Version} status=ok signatures={result.Signatures.Count} elapsed={timer.ElapsedMilliseconds}ms");
+        trace.Complete("success");
         return mapped;
     }
 

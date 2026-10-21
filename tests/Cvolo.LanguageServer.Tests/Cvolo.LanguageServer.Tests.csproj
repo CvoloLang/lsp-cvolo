@@ -28,6 +28,10 @@
     <ProjectReference Include="..\..\src\Cvolo.LanguageServer\Cvolo.LanguageServer.csproj" />
     <ProjectReference Include="..\..\src\Cvolo.LanguageServer.Core\Cvolo.LanguageServer.Core.csproj" />
     <ProjectReference Include="..\..\src\Cvolo.LanguageServer.Cvolo\Cvolo.LanguageServer.Cvolo.csproj" />
+    <!-- Interim cross-repo source reference to the compiler observability runtime; the tooling
+         bundle will ship these assemblies with manifest version checks in a later stage. -->
+    <ProjectReference Include="..\..\..\Cvolo\src\Cvolo.Observability.Abstractions\Cvolo.Observability.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\Cvolo\src\Cvolo.Observability\Cvolo.Observability.csproj" />
   </ItemGroup>
 
   <!-- Compile-time access to the pinned tooling for backend assertions. The

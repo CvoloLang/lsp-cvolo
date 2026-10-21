@@ -3,6 +3,12 @@
   "dependencies": {
     "net10.0": {
       "cvolo.languageserver.core": {
+        "type": "Project",
+        "dependencies": {
+          "Cvolo.Observability.Abstractions": "[0.0.21-alpha, )"
+        }
+      },
+      "cvolo.observability.abstractions": {
         "type": "Project"
       }
     },

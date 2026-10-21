@@ -3,6 +3,8 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
+using global::Cvolo.Observability.Abstractions;
 using StreamJsonRpc;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
 
@@ -16,8 +18,10 @@ namespace Cvolo.LanguageServer.Protocol;
 internal sealed class InlayHintHandler(
     ILspLogger logger,
     Func<DocumentStore> storeAccessor,
-    Func<EditorIntelligenceSettings> settingsAccessor)
+    Func<EditorIntelligenceSettings> settingsAccessor,
+    ICompilerObserver? observer = null)
 {
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private DocumentStore? _store;
 
     private DocumentStore Store => _store ??= storeAccessor();
@@ -25,15 +29,19 @@ internal sealed class InlayHintHandler(
     [JsonRpcMethod("textDocument/inlayHint", UseSingleObjectParameterDeserialization = true)]
     public async Task<InlayHintPayload[]?> InlayHints(InlayHintParamsPayload? parameters, CancellationToken cancellationToken)
     {
+        using var trace = FeatureTrace.Start(_observer, "inlayHint", cancellationToken);
+
         if (parameters?.TextDocument is not { } textDocument)
         {
             logger.Debug("[inlayHint] request without a textDocument; ignored.");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
 
         if (parameters.Range is not { } range)
         {
             logger.Debug("[inlayHint] request without a range; ignored.");
+            trace.Complete("not_found", "invalid_position");
             return null;
         }
 
@@ -41,6 +49,7 @@ internal sealed class InlayHintHandler(
             || !TextDocumentSyncHandler.IsCvoloDocument(documentUri))
         {
             logger.Debug($"[inlayHint] non-cvolo document '{textDocument.Uri}' ignored.");
+            trace.Complete("unsupported", "unsupported_uri");
             return null;
         }
 
@@ -51,6 +60,7 @@ internal sealed class InlayHintHandler(
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[inlayHint] '{documentUri}' is not open; no hints.");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
 
@@ -58,21 +68,27 @@ internal sealed class InlayHintHandler(
         if (!TryMapRequestedRange(index, range, out int start, out int end))
         {
             logger.Debug($"[inlayHint] the requested range does not map to the captured text of '{documentUri}'.");
+            trace.MappingRejected("invalid_position");
+            trace.Complete("not_found", "invalid_position");
             return null;
         }
 
         BackendInlayHintOptions options = settingsAccessor().InlayHints;
         BackendOffsetFormat offsetFormat = settingsAccessor().Layout.OffsetFormat;
         IReadOnlyList<BackendInlayHint> hints;
+        IOperationScope backend = trace.Backend();
         try
         {
             hints = await Task.Run(
                 () => Store.GetInlayHints(context, new TextSpan(start, end - start), options),
                 cancellationToken).ConfigureAwait(false);
+            trace.CompleteBackend(backend, "completed");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[inlayHint] backend failure for '{documentUri}': {ex}");
+            logger.Warning($"[inlayHint] backend failure for '{documentUri}': {ex.GetType().Name}");
+            trace.CompleteBackend(backend, "faulted", "exception");
+            trace.Complete("faulted", "exception");
             return null;
         }
 
@@ -81,8 +97,12 @@ internal sealed class InlayHintHandler(
         if (!Store.IsCurrent(context))
         {
             logger.Debug($"[inlayHint] discarded stale result for '{documentUri}'.");
+            trace.Freshness(fresh: false);
+            trace.Complete("stale_discarded", "document_version_stale");
             return null;
         }
+
+        trace.Freshness(fresh: true);
 
         var mapped = new List<InlayHintPayload>(hints.Count);
         foreach (BackendInlayHint hint in hints)
@@ -94,6 +114,7 @@ internal sealed class InlayHintHandler(
         }
 
         mapped.Sort(CompareHints);
+        trace.Complete("success");
         return [.. mapped];
     }
 

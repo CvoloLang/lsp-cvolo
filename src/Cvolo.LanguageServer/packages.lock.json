@@ -93,13 +93,26 @@
         "contentHash": "GFdJvsN/VczpP0GfdPIi0jDudGH2Emk3rcIJHdqwU2SL2zQm1xSl6OTYvQSUxvzHu3ClWo096ICdWXVkpifQUA=="
       },
       "cvolo.languageserver.core": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Cvolo.Observability.Abstractions": "[0.0.21-alpha, )"
+        }
       },
       "cvolo.languageserver.cvolo": {
         "type": "Project",
         "dependencies": {
-          "Cvolo.LanguageServer.Core": "[0.1.0-alpha.12, )"
+          "Cvolo.LanguageServer.Core": "[0.1.0-alpha.13, )",
+          "Cvolo.Observability.Abstractions": "[0.0.21-alpha, )"
         }
+      },
+      "cvolo.observability": {
+        "type": "Project",
+        "dependencies": {
+          "Cvolo.Observability.Abstractions": "[0.0.21-alpha, )"
+        }
+      },
+      "cvolo.observability.abstractions": {
+        "type": "Project"
       }
     },
     "net10.0/linux-arm64": {},

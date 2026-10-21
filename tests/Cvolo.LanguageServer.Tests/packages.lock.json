@@ -224,21 +224,36 @@
       "cvolo-language-server": {
         "type": "Project",
         "dependencies": {
-          "Cvolo.LanguageServer.Core": "[0.1.0-alpha.12, )",
-          "Cvolo.LanguageServer.Cvolo": "[0.1.0-alpha.12, )",
+          "Cvolo.LanguageServer.Core": "[0.1.0-alpha.13, )",
+          "Cvolo.LanguageServer.Cvolo": "[0.1.0-alpha.13, )",
+          "Cvolo.Observability": "[0.0.21-alpha, )",
+          "Cvolo.Observability.Abstractions": "[0.0.21-alpha, )",
           "Microsoft.VisualStudio.LanguageServer.Protocol": "[17.2.8, )",
           "StreamJsonRpc": "[2.25.29, )",
           "System.CommandLine": "[2.0.9, )"
         }
       },
       "cvolo.languageserver.core": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Cvolo.Observability.Abstractions": "[0.0.21-alpha, )"
+        }
       },
       "cvolo.languageserver.cvolo": {
         "type": "Project",
         "dependencies": {
-          "Cvolo.LanguageServer.Core": "[0.1.0-alpha.12, )"
+          "Cvolo.LanguageServer.Core": "[0.1.0-alpha.13, )",
+          "Cvolo.Observability.Abstractions": "[0.0.21-alpha, )"
         }
+      },
+      "cvolo.observability": {
+        "type": "Project",
+        "dependencies": {
+          "Cvolo.Observability.Abstractions": "[0.0.21-alpha, )"
+        }
+      },
+      "cvolo.observability.abstractions": {
+        "type": "Project"
       },
       "Microsoft.VisualStudio.LanguageServer.Protocol": {
         "type": "CentralTransitive",

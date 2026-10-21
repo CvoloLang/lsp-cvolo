@@ -3,6 +3,8 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
+using global::Cvolo.Observability.Abstractions;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using System.Diagnostics;
@@ -17,8 +19,9 @@ namespace Cvolo.LanguageServer.Protocol;
 /// formats the compiler-owned display text as LSP markup content. It owns no
 /// Cvolo semantics (§16, §24, §29.1).
 /// </summary>
-internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeAccessor, Func<bool> markdownAccessor)
+internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeAccessor, Func<bool> markdownAccessor, ICompilerObserver? observer = null)
 {
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private DocumentStore? _store;
 
     // Resolved on first use so the session-scoped store is created from the
@@ -29,9 +32,12 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
     public async Task<Hover?> Hover(TextDocumentPositionParams? parameters, CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
+        using var trace = FeatureTrace.Start(_observer, "hover", cancellationToken);
+
         if (parameters?.TextDocument is not { } textDocument)
         {
             logger.Debug("[hover] request without a textDocument; ignored.");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
 
@@ -41,6 +47,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
             || !TextDocumentSyncHandler.IsCvoloDocument(documentUri))
         {
             logger.Debug($"[hover] non-cvolo document '{textDocument.Uri}' ignored.");
+            trace.Complete("unsupported", "unsupported_uri");
             return null;
         }
 
@@ -51,6 +58,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
         if (!Store.TryCapture(documentUri, out SemanticRequestContext context))
         {
             logger.Debug($"[hover] '{documentUri}' is not open; no hover.");
+            trace.Complete("not_found", "document_not_open");
             return null;
         }
         LogTiming("capture", stopwatch, documentUri);
@@ -59,6 +67,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
         if (!index.TryGetOffset(new TextPosition(position.Line, position.Character), out int offset))
         {
             logger.Debug($"[hover] invalid request position {position.Line}:{position.Character} for '{documentUri}'.");
+            trace.Complete("not_found", "invalid_position");
             return null;
         }
 
@@ -66,6 +75,7 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
 
         BackendSymbolInfo? symbol;
         BackendTypeLayoutInspection? layout = null;
+        IOperationScope backend = trace.Backend();
         try
         {
             // Both reads belong to the captured snapshot. The layout service
@@ -87,10 +97,13 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
             symbol = response.resolved;
             layout = response.typeLayout;
             LogTiming("backend", stopwatch, documentUri);
+            trace.CompleteBackend(backend, "completed");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[hover] backend failure for '{documentUri}': {ex.Message}");
+            logger.Warning($"[hover] backend failure for '{documentUri}': {ex.GetType().Name}");
+            trace.CompleteBackend(backend, "faulted", "exception");
+            trace.Complete("faulted", "exception");
             return null;
         }
 
@@ -99,11 +112,16 @@ internal sealed class HoverHandler(ILspLogger logger, Func<DocumentStore> storeA
         if (!Store.IsCurrent(context))
         {
             logger.Debug($"[hover] discarded stale result for '{documentUri}'.");
+            trace.Freshness(fresh: false);
+            trace.Complete("stale_discarded", "document_version_stale");
             return null;
         }
 
+        trace.Freshness(fresh: true);
+
         Hover? hover = symbol is null ? null : Map(symbol, layout, index, context.Document.Text.Length);
         LogTiming("total", stopwatch, documentUri);
+        trace.Complete(hover is null ? "not_found" : "success", hover is null ? "symbol_lookup_miss" : null);
         return hover;
     }
 

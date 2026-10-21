@@ -2,6 +2,7 @@ using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
+using global::Cvolo.Observability.Abstractions;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
 
 namespace Cvolo.LanguageServer.Diagnostics;
@@ -12,9 +13,58 @@ namespace Cvolo.LanguageServer.Diagnostics;
 /// built per captured document text and reused for every primary and related
 /// span mapped against that document.
 /// </summary>
-internal sealed class DiagnosticPublisher(ILspLogger logger, DiagnosticSink sink) : IDiagnosticPublisher
+internal sealed class DiagnosticPublisher(
+    ILspLogger logger,
+    DiagnosticSink sink,
+    ICompilerObserver? observer = null) : IDiagnosticPublisher
 {
     private const string SourceName = "cvolo";
+    private const string PublishAttemptEvent = "diagnostics.publish_attempt";
+    private const string PublishSentEvent = "diagnostics.publish_sent";
+    private const string PublishFaultedEvent = "diagnostics.publish_faulted";
+    private const string DiagnosticsDiscardedEvent = "diagnostics.discarded";
+    private const string ClearSentEvent = "diagnostics.clear_sent";
+    private const string PublishDecisionEvent = "decision.diagnostics.publish";
+
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
+
+    /// <summary>
+    /// Records the actual publication boundary. No source text, document URI, path,
+    /// diagnostic message or exception message is stored in the telemetry event.
+    /// </summary>
+    private void Emit(string eventCode, string outcome, string? reason = null,
+        IReadOnlyList<KeyValuePair<string, string>>? attributes = null)
+    {
+        if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
+            return;
+
+        _observer.Emit(new CompilerEvent
+        {
+            Event = eventCode,
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P1,
+            Outcome = outcome,
+            Reason = reason,
+            Attributes = attributes,
+        });
+    }
+
+    private void EmitDecision(string outcome, string? reason = null)
+    {
+        if (!_observer.IsEnabled(CompilerEventKind.Decision, DiagnosticDetail.L0))
+            return;
+
+        _observer.Emit(new CompilerEvent
+        {
+            Event = PublishDecisionEvent,
+            Kind = CompilerEventKind.Decision,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P1,
+            Outcome = outcome,
+            Reason = reason,
+        });
+    }
 
     public void Publish(DiagnosticRunContext context, BackendDiagnosticRun run)
     {
@@ -26,11 +76,83 @@ internal sealed class DiagnosticPublisher(ILspLogger logger, DiagnosticSink sink
         }
 
         logger.Info($"[diag] publishing {total} diagnostic(s) across {payloads.Count} document(s).");
+        EmitDecision("publish");
 
+        // A successful enqueue is not a successful JSON-RPC notification. Each payload
+        // reports its own terminal result from the per-URI transport lane.
         foreach (PublishDiagnosticsPayload payload in payloads)
         {
-            sink.Publish(payload);
+            PublishPayload(payload, clear: payload.Diagnostics.Length == 0);
         }
+    }
+
+    private void PublishPayload(PublishDiagnosticsPayload payload, bool clear, string? reason = null)
+    {
+        // The disabled path stays as cheap as ordinary publication: no captured callback,
+        // extra telemetry payload, or per-notification diagnostic allocation (§30, §59).
+        if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
+        {
+            sink.Publish(payload);
+            return;
+        }
+
+        var diagnosticCount = payload.Diagnostics.Length;
+        Emit(PublishAttemptEvent, "attempted", reason, PayloadCount(diagnosticCount, 1));
+        try
+        {
+            sink.Publish(payload, result =>
+            {
+                switch (result.State)
+                {
+                    case DiagnosticPublicationState.TransportAccepted:
+                        // "sent" is a completed JSON-RPC notification task, not a client ACK.
+                        Emit(clear ? ClearSentEvent : PublishSentEvent,
+                            "sent", reason, PayloadCount(diagnosticCount, 1, result.Sequence));
+                        break;
+
+                    case DiagnosticPublicationState.Faulted:
+                        Emit(PublishFaultedEvent, "faulted",
+                            result.Error?.GetType().Name ?? "transport_fault",
+                            PayloadCount(diagnosticCount, 1, result.Sequence));
+                        break;
+
+                    case DiagnosticPublicationState.Superseded:
+                        Emit(DiagnosticsDiscardedEvent, "discarded", "publication_superseded",
+                            PayloadCount(diagnosticCount, 1, result.Sequence));
+                        break;
+
+                    case DiagnosticPublicationState.Cancelled:
+                        Emit(DiagnosticsDiscardedEvent, "discarded", "publication_cancelled",
+                            PayloadCount(diagnosticCount, 1, result.Sequence));
+                        break;
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Emit(PublishFaultedEvent, "faulted", ex.GetType().Name, PayloadCount(diagnosticCount, 1));
+            throw;
+        }
+    }
+
+    private static IReadOnlyList<KeyValuePair<string, string>> PayloadCount(
+        int diagnostics, int documents, long? sequence = null)
+    {
+        if (sequence is null)
+        {
+            return
+            [
+                new("diagnosticCount", diagnostics.ToString()),
+                new("documentCount", documents.ToString()),
+            ];
+        }
+
+        return
+        [
+            new("diagnosticCount", diagnostics.ToString()),
+            new("documentCount", documents.ToString()),
+            new("publicationSequence", sequence.Value.ToString()),
+        ];
     }
 
     /// <summary>
@@ -78,26 +200,30 @@ internal sealed class DiagnosticPublisher(ILspLogger logger, DiagnosticSink sink
 
     public void PublishEmpty(IReadOnlyList<DiagnosticPublishTarget> targets)
     {
+        EmitDecision("clear");
         foreach (DiagnosticPublishTarget target in targets)
         {
-            PublishEmpty(target.Uri);
+            PublishPayload(new PublishDiagnosticsPayload(ToUri(target.Uri), null, Array.Empty<DiagnosticPayload>()), clear: true);
         }
     }
 
     public void PublishEmpty(DocumentUri uri)
     {
-        sink.Publish(new PublishDiagnosticsPayload(ToUri(uri), null, Array.Empty<DiagnosticPayload>()));
+        EmitDecision("clear");
+        PublishPayload(new PublishDiagnosticsPayload(ToUri(uri), null, Array.Empty<DiagnosticPayload>()), clear: true);
     }
 
     public void PublishUnavailable(IReadOnlyList<DiagnosticPublishTarget> targets)
     {
         logger.Warning(
             $"[diag] analysis unavailable for {targets.Count} document(s); clearing marks as an explicit unavailability signal, not a clean result.");
+        EmitDecision("clear", "analysis_unavailable");
         foreach (DiagnosticPublishTarget target in targets)
         {
             // Clear stale marks, but the caller records unavailability separately so this
             // empty publication is never interpreted as "validated with zero diagnostics".
-            sink.Publish(new PublishDiagnosticsPayload(ToUri(target.Uri), null, Array.Empty<DiagnosticPayload>()));
+            PublishPayload(new PublishDiagnosticsPayload(ToUri(target.Uri), null, Array.Empty<DiagnosticPayload>()),
+                clear: true, reason: "analysis_unavailable");
         }
     }
 

@@ -1,5 +1,6 @@
 using Cvolo.LanguageServer.Logging;
 using StreamJsonRpc;
+using global::Cvolo.Observability.Abstractions;
 
 namespace Cvolo.LanguageServer.Protocol;
 
@@ -11,8 +12,11 @@ namespace Cvolo.LanguageServer.Protocol;
 internal sealed class ConfigurationHandler(
     ILspLogger logger,
     Func<Newtonsoft.Json.Linq.JObject, bool> applyConfiguration,
-    Action requestRefresh)
+    Action requestRefresh,
+    ICompilerObserver? observer = null)
 {
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
+
     [JsonRpcMethod("workspace/didChangeConfiguration", UseSingleObjectParameterDeserialization = true)]
     public void DidChangeConfiguration(DidChangeConfigurationParams? parameters)
     {
@@ -25,10 +29,28 @@ internal sealed class ConfigurationHandler(
         if (!applyConfiguration(settings))
         {
             logger.Debug("[didChangeConfiguration] the editor intelligence settings are unchanged.");
+            EmitConfiguration("unchanged");
             return;
         }
 
         logger.Info("Editor intelligence settings changed; requesting a CodeLens and inlay hint refresh.");
+        EmitConfiguration("applied");
         requestRefresh();
+    }
+
+    private void EmitConfiguration(string outcome)
+    {
+        if (!_observer.IsEnabled(CompilerEventKind.Lifecycle, DiagnosticDetail.L0))
+            return;
+
+        _observer.Emit(new CompilerEvent
+        {
+            Event = "configuration.applied",
+            Stage = "lifecycle",
+            Kind = CompilerEventKind.Lifecycle,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P2,
+            Outcome = outcome,
+        });
     }
 }

@@ -4,7 +4,9 @@ using Cvolo.Compiler.Tooling;
 using Cvolo.LanguageServer.Core.Scheduling;
 using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
 using Cvolo.LanguageServer.Protocol;
+using Cvolo.Observability.Abstractions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using StreamJsonRpc;
@@ -37,7 +39,16 @@ internal static class ServerPipeline
 
         TerminationRequest termination = new();
         using IClientProcessWatcher clientWatcher = ClientProcessWatcherFactory.Create();
-        using Protocol.LanguageServer server = new(termination, logger, clientWatcher);
+        using LspObservabilitySession observability = LspObservabilitySession.Start();
+        using Protocol.LanguageServer server = new(termination, logger, clientWatcher, observer: observability.Observer);
+        observability.Emit(new CompilerEvent
+        {
+            Event = "server.start",
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P0,
+            Outcome = "started",
+        });
 
         JsonMessageFormatter formatter = new();
         formatter.JsonSerializer.ContractResolver = new CamelCasePropertyNamesContractResolver();
@@ -51,10 +62,20 @@ internal static class ServerPipeline
             stdin = new TeeStream(stdin, rawSink);
         }
 
-        using HeaderDelimitedMessageHandler handler = new(stdout, stdin, formatter);
+        using RpcObservability rpcObservability = new(observability.Observer);
+        using ObservedHeaderDelimitedHandler handler = new(stdout, stdin, formatter, rpcObservability);
+        observability.Emit(new CompilerEvent
+        {
+            Event = "transport.ready",
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P0,
+            Outcome = "ready",
+        });
         IngressPipeline ingress = new();
         server.Ingress = ingress;
         JsonRpc rpc = new(handler);
+        rpcObservability.Attach(rpc);
         rpc.SynchronizationContext = new IngressSynchronizationContext(ingress);
         server.Diagnostics.Attach(rpc);
         server.Refresh.Attach(rpc);
@@ -190,6 +211,15 @@ internal static class ServerPipeline
 
         rpc.Dispose();
         server.Dispose();
+
+        observability.Emit(new CompilerEvent
+        {
+            Event = "server.stop",
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P0,
+            Outcome = termination.NormalRequested ? "stopped" : "abnormal",
+        });
 
         return termination.NormalRequested ? 0 : 1;
     }

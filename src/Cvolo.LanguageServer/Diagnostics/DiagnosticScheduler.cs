@@ -4,6 +4,7 @@ using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
 using System.Collections.Concurrent;
+using global::Cvolo.Observability.Abstractions;
 
 namespace Cvolo.LanguageServer.Diagnostics;
 
@@ -12,12 +13,29 @@ namespace Cvolo.LanguageServer.Diagnostics;
 /// are coalesced; the newest snapshot wins. Stale snapshots are never published.
 /// Background work never blocks the JSON-RPC receive loop.
 /// </summary>
-internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublisher publisher, ILspLogger logger) : IDisposable
+internal sealed class DiagnosticScheduler(
+    DocumentStore store,
+    IDiagnosticPublisher publisher,
+    ILspLogger logger,
+    ICompilerObserver? observer = null) : IDisposable
 {
     private const int FailureRecoveryThreshold = 3;
     // Do not parse/resolve the entire project for every intermediate keystroke.
     private static readonly TimeSpan EditQuietPeriod = TimeSpan.FromMilliseconds(350);
 
+    private const string DiagnosticsRequestedEvent = "diagnostics.requested";
+    private const string DiagnosticsCoalescedEvent = "diagnostics.coalesced";
+    private const string WorkerQueuedEvent = "worker.queued";
+    private const string WorkerStartedEvent = "worker.started";
+    private const string AnalysisStartedEvent = "analysis.started";
+    private const string AnalysisCompletedEvent = "analysis.completed";
+    private const string DiagnosticsCommittedEvent = "diagnostics.committed";
+    private const string DiagnosticsDiscardedEvent = "diagnostics.discarded";
+
+    private const string DiscardReasonStaleResult = "stale_result";
+    private const string DiscardReasonNoTargets = "no_open_documents";
+
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private readonly ConcurrentDictionary<BackendProject, ProjectWorker> _workers = new();
     private readonly ConcurrentDictionary<BackendProject, bool> _unavailable = new();
     private volatile bool _stopped;
@@ -53,17 +71,44 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
         _workers.Clear();
     }
 
+    /// <summary>
+    /// Emits one diagnostic-pipeline event. Only machine outcomes, reasons and the analysis id are
+    /// carried — never document text or paths in basic/detailed modes (§39 privacy).
+    /// </summary>
+    private void Emit(string eventCode, string outcome, string? reason = null, string? analysisId = null, string? snapshotId = null)
+    {
+        if (!_observer.IsEnabled(CompilerEventKind.Phase, DiagnosticDetail.L0))
+            return;
+
+        _observer.Emit(new CompilerEvent
+        {
+            Event = eventCode,
+            Kind = CompilerEventKind.Phase,
+            Detail = DiagnosticDetail.L0,
+            Priority = EventPriority.P1,
+            Outcome = outcome,
+            Reason = reason,
+            AnalysisId = analysisId,
+            SnapshotId = snapshotId,
+        });
+    }
+
     private void RunOnce(BackendProject project, ProjectWorker worker)
     {
+        string analysisId = NextAnalysisId();
         DiagnosticRunContext context;
         try
         {
             if (!store.TryCaptureDiagnosticRun(project, out context))
+            {
+                // No open documents project at this revision: an honest discard, not a silent skip.
+                Emit(DiagnosticsDiscardedEvent, "discarded", DiscardReasonNoTargets, analysisId);
                 return;
+            }
         }
         catch (Exception ex)
         {
-            HandleFailure(project, worker, null, ex);
+            HandleFailure(project, worker, null, analysisId, ex);
             return;
         }
 
@@ -71,20 +116,27 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
         try
         {
             BackendDocumentHandle[] handles = context.Targets.Select(target => target.Document).ToArray();
+            Emit(AnalysisStartedEvent, "started", analysisId: analysisId);
             run = store.GetDiagnostics(context.CurrentProjectSnapshot, handles);
         }
         catch (Exception ex)
         {
-            HandleFailure(project, worker, context, ex);
+            Emit(AnalysisCompletedEvent, "faulted", ex.GetType().Name, analysisId);
+            HandleFailure(project, worker, context, analysisId, ex);
             return;
         }
+
+        Emit(AnalysisCompletedEvent, "success", analysisId: analysisId);
 
         // Successful computation resets failures even when it was superseded.
         worker.ResetFailures();
         if (_unavailable.TryRemove(project, out _))
             logger.Info($"[diag] diagnostics available again for project '{project}' after a successful analysis.");
         if (_stopped || worker.IsStopped)
+        {
+            Emit(DiagnosticsDiscardedEvent, "discarded", DiscardReasonStaleResult, analysisId);
             return;
+        }
 
         try
         {
@@ -95,8 +147,15 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
                     if (!_stopped && !worker.IsStopped)
                         publisher.Publish(context with { Targets = eligible }, run);
                 });
-            if (!committed)
+            if (committed)
+            {
+                Emit(DiagnosticsCommittedEvent, "committed", analysisId: analysisId);
+            }
+            else
+            {
                 logger.Debug($"[diag] discarded stale diagnostics for project '{project}'.");
+                Emit(DiagnosticsDiscardedEvent, "discarded", DiscardReasonStaleResult, analysisId);
+            }
         }
         catch (Exception ex)
         {
@@ -104,7 +163,7 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
         }
     }
 
-    private void HandleFailure(BackendProject project, ProjectWorker worker, DiagnosticRunContext? context, Exception ex)
+    private void HandleFailure(BackendProject project, ProjectWorker worker, DiagnosticRunContext? context, string analysisId, Exception ex)
     {
         logger.Error($"Diagnostic analysis failed for project '{project}': {ex.Message}");
         int failures = worker.IncrementFailures();
@@ -127,6 +186,10 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
         }
     }
 
+    private string NextAnalysisId() => $"an-{Interlocked.Increment(ref _analysisCounter)}";
+
+    private long _analysisCounter;
+
     private void LogUnexpectedWorkerFailure(BackendProject project, Exception ex)
     {
         logger.Error($"Diagnostic worker for project '{project}' failed unexpectedly: {ex.Message}");
@@ -148,18 +211,35 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
 
         public void Request()
         {
+            bool coalesced;
+            bool startWorker;
             lock (_lock)
             {
                 if (_stopped || owner._stopped)
                     return;
 
+                coalesced = _running;
                 _pending = true;
                 _revision++;
-                if (_running)
-                    return;
+                startWorker = !_running;
                 _running = true;
             }
-            _ = Task.Run(ProcessAsync);
+
+            owner.Emit(DiagnosticsRequestedEvent, "requested");
+            if (coalesced)
+            {
+                // A run is already in flight; this request only bumps the revision it will observe.
+                owner.Emit(DiagnosticsCoalescedEvent, "coalesced");
+            }
+            else
+            {
+                owner.Emit(WorkerQueuedEvent, "queued");
+            }
+
+            if (startWorker)
+            {
+                _ = Task.Run(ProcessAsync);
+            }
         }
 
         public void Stop()
@@ -209,6 +289,7 @@ internal sealed class DiagnosticScheduler(DocumentStore store, IDiagnosticPublis
                             continue;
                     }
 
+                    owner.Emit(WorkerStartedEvent, "started");
                     owner.RunOnce(project, this);
                 }
             }

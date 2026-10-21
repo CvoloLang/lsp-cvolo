@@ -3,6 +3,8 @@ using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Diagnostics;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
+using global::Cvolo.Observability.Abstractions;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
@@ -17,66 +19,115 @@ namespace Cvolo.LanguageServer.Protocol;
 internal sealed class RenameHandler(
     ILspLogger logger,
     Func<DocumentStore> storeAccessor,
-    Func<bool> documentChangesSupportedAccessor)
+    Func<bool> documentChangesSupportedAccessor,
+    ICompilerObserver? observer = null)
 {
+    private readonly ICompilerObserver _observer = observer ?? NoopCompilerObserver.Instance;
     private DocumentStore? _store;
     private DocumentStore Store => _store ??= storeAccessor();
 
     [JsonRpcMethod("textDocument/prepareRename", UseSingleObjectParameterDeserialization = true)]
     public async Task<PrepareRenameResultPayload?> PrepareRename(PrepareRenameParamsPayload? parameters, CancellationToken cancellationToken)
     {
+        using var trace = FeatureTrace.Start(_observer, "prepareRename", cancellationToken);
+
         await RequestBarrier.WaitAsync(Store, cancellationToken);
 
-        if (!TryCapture(parameters?.TextDocument, parameters?.Position, out DocumentUri documentUri, out SemanticRequestContext context, out int offset))
+        if (!TryCapture(parameters?.TextDocument, parameters?.Position, out DocumentUri documentUri, out SemanticRequestContext context, out int offset, out string captureReason))
+        {
+            trace.Complete("not_found", captureReason);
             return null;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         BackendRenamePreparation? preparation;
+        IOperationScope backend = trace.Backend();
         try
         {
             preparation = await Task.Run(() => Store.PrepareRename(context, offset), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[prepareRename] backend failure for '{documentUri}': {ex.Message}");
+            logger.Warning($"[prepareRename] backend failure for '{documentUri}': {ex.GetType().Name}");
+            trace.CompleteBackend(backend, "faulted", "exception");
+            trace.Complete("faulted", "exception");
             return null;
         }
 
-        if (preparation is null || !TryMapSpan(context.Document.Text, preparation.SubjectSpan, out LspRange? range))
+        trace.CompleteBackend(backend, "completed");
+
+        if (preparation is null)
+        {
+            trace.Complete("not_found", "symbol_lookup_miss");
             return null;
+        }
+
+        if (!TryMapSpan(context.Document.Text, preparation.SubjectSpan, out LspRange? range))
+        {
+            trace.MappingRejected("invalid_target_span");
+            trace.Complete("not_found", "invalid_target_span");
+            return null;
+        }
 
         if (preparation.SubjectSpan.End > context.Document.Text.Length
             || context.Document.Text.Substring(preparation.SubjectSpan.Start, preparation.SubjectSpan.Length) != preparation.Placeholder)
+        {
+            trace.MappingRejected("invalid_target_span");
+            trace.Complete("not_found", "invalid_target_span");
             return null;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         if (!Store.IsCurrent(context))
+        {
+            trace.Freshness(false);
+            trace.Complete("stale_discarded", "document_version_stale");
             return null;
+        }
 
+        trace.Freshness(true);
+        trace.Complete("success");
         return new PrepareRenameResultPayload(range, preparation.Placeholder);
     }
 
     [JsonRpcMethod("textDocument/rename", UseSingleObjectParameterDeserialization = true)]
     public async Task<WorkspaceEditPayload> Rename(RenameParamsPayload? parameters, CancellationToken cancellationToken)
     {
+        using var trace = FeatureTrace.Start(_observer, "rename", cancellationToken);
+
         if (parameters?.TextDocument is not { } textDocument || parameters.Position is not { } position || parameters.NewName is null)
+        {
+            trace.Complete("not_found", "document_not_open");
             throw RequestFailed("Invalid rename request.");
+        }
 
         await RequestBarrier.WaitAsync(Store, cancellationToken);
 
         if (!TextDocumentSyncHandler.TryCreateDocumentUri(textDocument.Uri, out DocumentUri documentUri)
-            || !TextDocumentSyncHandler.IsCvoloDocument(documentUri)
-            || !Store.TryCaptureSemanticEdit(documentUri, out SemanticEditRequestContext editContext))
+            || !TextDocumentSyncHandler.IsCvoloDocument(documentUri))
+        {
+            trace.Complete("unsupported", "unsupported_uri");
             throw RequestFailed("The rename target is not an open Cvolo document.");
+        }
+
+        if (!Store.TryCaptureSemanticEdit(documentUri, out SemanticEditRequestContext editContext))
+        {
+            trace.Complete("not_found", "document_not_open");
+            throw RequestFailed("The rename target is not an open Cvolo document.");
+        }
 
         var semantic = editContext.Semantic;
         var sourceIndex = new LineIndex(semantic.Document.Text);
         if (!sourceIndex.TryGetOffset(new TextPosition(position.Line, position.Character), out int offset))
+        {
+            trace.Complete("not_found", "invalid_position");
             throw RequestFailed("The rename position is outside the captured document.");
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
 
         BackendRenameResult backendResult;
+        IOperationScope backend = trace.Backend();
         try
         {
             backendResult = await Task.Run(() =>
@@ -89,22 +140,45 @@ internal sealed class RenameHandler(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.Warning($"[rename] backend failure for '{documentUri}': {ex.Message}");
+            logger.Warning($"[rename] backend failure for '{documentUri}': {ex.GetType().Name}");
+            trace.CompleteBackend(backend, "faulted", "exception");
+            trace.Complete("faulted", "exception");
             throw RequestFailed("Rename analysis failed.");
         }
+
+        trace.CompleteBackend(backend, "completed");
 
         cancellationToken.ThrowIfCancellationRequested();
 
         if (backendResult is BackendRenameFailure failure)
+        {
+            trace.Complete("not_found", "symbol_lookup_miss");
             throw RequestFailed(failure.Message);
+        }
 
         var success = (BackendRenameSuccess)backendResult;
-        WorkspaceEditPayload payload = BuildWorkspaceEdit(success, editContext);
+        WorkspaceEditPayload payload;
+        try
+        {
+            payload = BuildWorkspaceEdit(success, editContext);
+        }
+        catch (LocalRpcException)
+        {
+            trace.MappingRejected("invalid_target_span");
+            trace.Complete("not_found", "invalid_target_span");
+            throw;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         if (!Store.IsCurrent(semantic))
+        {
+            trace.Freshness(false);
+            trace.Complete("stale_discarded", "document_version_stale");
             throw ContentModified("The project changed while rename was being prepared. Please retry the rename.");
+        }
 
+        trace.Freshness(true);
+        trace.Complete("success");
         return payload;
     }
 
@@ -193,19 +267,45 @@ internal sealed class RenameHandler(
         return new WorkspaceEditPayload { Changes = changes };
     }
 
-    private bool TryCapture(TextDocumentIdentifier? textDocument, Position? position, out DocumentUri documentUri, out SemanticRequestContext context, out int offset)
+    private bool TryCapture(
+        TextDocumentIdentifier? textDocument,
+        Position? position,
+        out DocumentUri documentUri,
+        out SemanticRequestContext context,
+        out int offset,
+        out string reason)
     {
         documentUri = default;
         context = default;
         offset = 0;
-        if (textDocument is null || position is null
-            || !TextDocumentSyncHandler.TryCreateDocumentUri(textDocument.Uri, out documentUri)
-            || !TextDocumentSyncHandler.IsCvoloDocument(documentUri)
-            || !Store.TryCapture(documentUri, out context))
+        if (textDocument is null || position is null)
+        {
+            reason = "document_not_open";
             return false;
+        }
+
+        if (!TextDocumentSyncHandler.TryCreateDocumentUri(textDocument.Uri, out documentUri)
+            || !TextDocumentSyncHandler.IsCvoloDocument(documentUri))
+        {
+            reason = "unsupported_uri";
+            return false;
+        }
+
+        if (!Store.TryCapture(documentUri, out context))
+        {
+            reason = "document_not_open";
+            return false;
+        }
 
         var index = new LineIndex(context.Document.Text);
-        return index.TryGetOffset(new TextPosition(position.Line, position.Character), out offset);
+        if (!index.TryGetOffset(new TextPosition(position.Line, position.Character), out offset))
+        {
+            reason = "invalid_position";
+            return false;
+        }
+
+        reason = "success";
+        return true;
     }
 
     private static bool TryMapSpan(string text, TextSpan span, out LspRange range)
