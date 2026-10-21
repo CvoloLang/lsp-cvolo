@@ -160,6 +160,25 @@ public sealed class RecordingControlPlaneTests
             string jsonl = File.ReadAllText(file);
             Assert.Contains("recording.mode_changed", jsonl, StringComparison.Ordinal);
             Assert.Contains("rpc.request.received", jsonl, StringComparison.Ordinal);
+
+            // A successful Stop must release the writer's Windows file handle.
+            // Starting a second epoch must append through a NEW writer, not
+            // reuse the disposed one and silently discard subsequent events.
+            JObject restarted = await server.Client.SetRecordingPolicyAsync("basic");
+            Assert.Equal("applied", (string?)restarted["status"]);
+            Assert.Equal("active", (string?)restarted["writerState"]);
+            Assert.Equal(3, (long)restarted["recordingEpoch"]!);
+            await server.Client.TryUnknownRequestAsync();
+
+            JObject stoppedAgain = await server.Client.SetRecordingPolicyAsync("off");
+            Assert.Equal("applied", (string?)stoppedAgain["status"]);
+            Assert.Equal(4, (long)stoppedAgain["recordingEpoch"]!);
+            Assert.Equal("idle", (string?)stoppedAgain["writerState"]);
+            Assert.False((bool)stoppedAgain["replayIncomplete"]!);
+
+            string afterRestart = File.ReadAllText(file);
+            Assert.True(afterRestart.Length > jsonl.Length);
+            Assert.Contains("rpc.request.received", afterRestart, StringComparison.Ordinal);
         }
         finally
         {

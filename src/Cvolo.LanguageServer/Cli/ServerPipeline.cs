@@ -76,6 +76,8 @@ internal static class ServerPipeline
         server.Ingress = ingress;
         JsonRpc rpc = new(handler);
         rpcObservability.Attach(rpc);
+        if (rpc is IJsonRpcFormatterCallbacks callbacks)
+            callbacks.ResponseSent += (_, response) => server.OnRpcResponseSent(response.IsSuccessfulResponse);
         rpc.SynchronizationContext = new IngressSynchronizationContext(ingress);
         server.Diagnostics.Attach(rpc);
         server.Refresh.Attach(rpc);

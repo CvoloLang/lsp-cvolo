@@ -18,6 +18,9 @@ internal sealed class LspObservabilitySession : IDisposable
     private readonly IObservabilityClock _clock;
     private readonly object _gate = new();
     private JsonlEventWriter? _writer;
+    // A Stop closes the file handle. A later Start must not reuse that
+    // disposed writer (Windows also requires this for read/export access).
+    private bool _writerStopped;
     private Task<int>? _pendingDrain;
     private bool _drainFaulted;
     private string? _writerOpenFailure;
@@ -118,7 +121,7 @@ internal sealed class LspObservabilitySession : IDisposable
 
             if (mode != ObservabilityMode.Off)
             {
-                if (_options.OutputPath is not null && _writer is null)
+                if (_options.OutputPath is not null && (_writer is null || _writerStopped))
                 {
                     var candidate = new JsonlEventWriter(
                         _queue, Observer.Identity, _clock, _options);
@@ -129,6 +132,7 @@ internal sealed class LspObservabilitySession : IDisposable
                         return new(false, false, "writer_open_failed");
                     }
                     _writer = candidate;
+                    _writerStopped = false;
                     _writerOpenFailure = null;
                 }
 
@@ -200,6 +204,15 @@ internal sealed class LspObservabilitySession : IDisposable
         if (task.IsFaulted || task.IsCanceled)
             _drainFaulted = true;
         _pendingDrain = null;
+
+        // A fully drained recording boundary has to release its file handle.
+        // Otherwise Windows cannot read the JSONL for export after Stop ACK,
+        // and a subsequent Start would accidentally reuse the stopped writer.
+        if (Observer.Mode == ObservabilityMode.Off && _writer is not null && !_writerStopped)
+        {
+            _writer.Dispose();
+            _writerStopped = true;
+        }
     }
 
     /// <summary>Lifecycle records bypass the normal mode gate.</summary>
@@ -233,8 +246,11 @@ internal sealed class LspObservabilitySession : IDisposable
                 try { task.Wait(_options.ShutdownFlushDeadline); }
                 catch (AggregateException) { _drainFaulted = true; }
             }
-            if (_pendingDrain is null || _pendingDrain.IsCompleted)
+            if ((_pendingDrain is null || _pendingDrain.IsCompleted) && !_writerStopped)
+            {
                 _writer?.Dispose();
+                _writerStopped = true;
+            }
         }
     }
 }

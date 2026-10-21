@@ -107,7 +107,9 @@ internal sealed class LanguageServer(
     private SemanticTokensRefreshCoordinator? _refresh;
     private AnchoredLensHandler? _anchoredLens;
     private readonly AnchoredActionRegistry _anchoredActions = new();
-    private Timer? _deadClientExitTimer;
+    // The process cannot exit until the invalid initialize response is written
+    // to the RPC transport. A wall-clock timer races the response on busy CI.
+    private int _exitAfterInitializeErrorResponse;
 
     /// <summary>
     /// Server-to-client diagnostic notification channel. The transport attaches
@@ -343,11 +345,7 @@ internal sealed class LanguageServer(
                 if (!clientWatcher.IsProcessAlive(clientPid))
                 {
                     logger.Error($"Client process {clientPid} is not alive; refusing the session.");
-                    _deadClientExitTimer = new Timer(
-                        _ => termination.TryRequestAbnormal(),
-                        null,
-                        TimeSpan.FromMilliseconds(150),
-                        Timeout.InfiniteTimeSpan);
+                    Volatile.Write(ref _exitAfterInitializeErrorResponse, 1);
                     throw new LocalRpcException($"Client process {clientPid} is not alive.")
                     {
                         ErrorCode = (int)JsonRpcErrorCode.InvalidParams,
@@ -562,6 +560,17 @@ internal sealed class LanguageServer(
             Observer);
     }
 
+    /// <summary>
+    /// Invoked by the transport after its response has been sent. A rejected
+    /// initialize request with a dead client PID must deliver InvalidParams
+    /// before asking the process to exit abnormally.
+    /// </summary>
+    internal void OnRpcResponseSent(bool successful)
+    {
+        if (!successful && Interlocked.Exchange(ref _exitAfterInitializeErrorResponse, 0) == 1)
+            termination.TryRequestAbnormal();
+    }
+
     private void OnClientTerminated()
     {
         termination.TryRequestAbnormal();
@@ -596,8 +605,6 @@ internal sealed class LanguageServer(
         _editorRefresh?.Stop();
         _sync?.Dispose();
         _codeActionResolveStore?.Clear();
-        _deadClientExitTimer?.Dispose();
-        _deadClientExitTimer = null;
         try
         {
             logger.Info(_serverMetrics.FormatReport());
