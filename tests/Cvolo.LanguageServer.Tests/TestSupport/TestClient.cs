@@ -91,6 +91,22 @@ internal sealed class TestClient : IDisposable
             new AnchoredActionValidationV3(actionToken));
     }
 
+    public Task<JObject> GetRecordingStatusAsync() =>
+        _rpc.InvokeAsync<JObject>("cvolo/observability/status.v1");
+
+    public Task<JObject> SetRecordingPolicyAsync(string mode, int protocolVersion = 1,
+        bool captureSources = false, bool capturePaths = false, bool forensicScope = false) =>
+        _rpc.InvokeWithParameterObjectAsync<JObject>(
+            "cvolo/observability/setRecording.v1",
+            new
+            {
+                protocolVersion,
+                mode,
+                captureSources,
+                capturePaths,
+                forensicScope,
+            });
+
     public Task NotifyInitializedAsync()
     {
         return _rpc.NotifyAsync(Methods.InitializedName, new InitializedParams());

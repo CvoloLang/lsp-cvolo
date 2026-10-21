@@ -4,6 +4,7 @@ using Cvolo.LanguageServer.Core.Scheduling;
 using Cvolo.LanguageServer.Cvolo;
 using Cvolo.LanguageServer.Diagnostics;
 using Cvolo.LanguageServer.Logging;
+using Cvolo.LanguageServer.Observability;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using StreamJsonRpc.Protocol;
@@ -51,6 +52,8 @@ internal sealed class LanguageServer(
     }
 
     private readonly SessionState _state = new();
+    private RecordingControlPlane? _recordingControl;
+    private RecordingControlPlane RecordingControl => GetOrCreate(ref _recordingControl, () => new RecordingControlPlane(Observer));
     private readonly DiagnosticSink _diagnostics = new(logger);
     private readonly CancellationTokenSource _sessionCancellation = new();
 
@@ -445,6 +448,15 @@ internal sealed class LanguageServer(
                 Experimental = new
                 {
                     cvoloAnchoredLens = new AnchoredLensCapability(AnchoredLensHandler.SchemaVersion, ValidateAction: true),
+                    cvoloObservability = RecordingControl.Supported ? new
+                    {
+                        version = RecordingControlPlane.Version,
+                        setRecording = RecordingControlPlane.SetMethod,
+                        getStatus = RecordingControlPlane.StatusMethod,
+                        supportedModes = new[] { "off", "basic", "detailed" },
+                        captureSourcesSupported = false,
+                        exportSupported = false,
+                    } : null,
                 },
             },
             new ServerInfo(ServerMetadata.ServerName, ServerMetadata.ServerVersion));
@@ -493,6 +505,18 @@ internal sealed class LanguageServer(
         logger.Info("initialized notification received.");
         EmitLsp("client.initialized", "initialized");
     }
+
+    /// <summary>Returns effective state; no mode change or implied persistence.</summary>
+    [JsonRpcMethod(RecordingControlPlane.StatusMethod)]
+    public RecordingPolicyStatus GetRecordingStatus() => RecordingControl.GetStatus();
+
+    /// <summary>
+    /// Applies an explicit mode request and returns the server-owned epoch.
+    /// An RPC timeout must never be interpreted by the client as an ACK.
+    /// </summary>
+    [JsonRpcMethod(RecordingControlPlane.SetMethod, UseSingleObjectParameterDeserialization = true)]
+    public RecordingPolicyAck SetRecordingPolicy(RecordingPolicyRequest? request)
+        => RecordingControl.Apply(request, _state.InitializeReceived);
 
     [JsonRpcMethod("$/setTrace", UseSingleObjectParameterDeserialization = true)]
     public void HandleSetTrace(SetTraceParams? parameters)
