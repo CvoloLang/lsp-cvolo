@@ -33,7 +33,18 @@ if (!(Test-Path $dll) -or !(Test-Path $manifestPath) -or !(Test-Path $sums)) {
 $m = Get-Content $manifestPath -Raw | ConvertFrom-Json
 if ($m.Commit -ne $ExpectedCommit -or $m.ToolingVersion -ne $version -or
     $m.CompilerCompatibilityLine -ne $compatibility -or $null -ne $m.RuntimeIdentifier) {
-    throw 'Development Tooling manifest provenance/version mismatch'
+    throw ("Development Tooling manifest mismatch: expected commit=$ExpectedCommit, " +
+        "toolingVersion=$version, compilerLine=$compatibility, RuntimeIdentifier=null; " +
+        "actual commit=$($m.Commit), toolingVersion=$($m.ToolingVersion), " +
+        "compilerLine=$($m.CompilerCompatibilityLine), RuntimeIdentifier=$($m.RuntimeIdentifier). " +
+        "Align the CI source revision with tooling.version; do not override the published pin.")
+}
+
+foreach ($name in @('Cvolo.Observability.Abstractions.dll', 'Cvolo.Observability.dll')) {
+    $requiredAssembly = Join-Path $outputDir $name
+    if (!(Test-Path -LiteralPath $requiredAssembly -PathType Leaf)) {
+        throw "Verified development Tooling bundle lacks required telemetry assembly: $name"
+    }
 }
 $entries = @(Get-Content $sums | Where-Object { $_ -ne '' })
 foreach ($entry in $entries) {

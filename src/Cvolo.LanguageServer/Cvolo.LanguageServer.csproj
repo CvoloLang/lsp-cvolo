@@ -80,13 +80,15 @@
   <ItemGroup>
     <ProjectReference Include="..\Cvolo.LanguageServer.Core\Cvolo.LanguageServer.Core.csproj" />
     <ProjectReference Include="..\Cvolo.LanguageServer.Cvolo\Cvolo.LanguageServer.Cvolo.csproj" />
-    <!--
-      Observability contracts and runtime are consumed as source references to the sibling
-      compiler checkout until the pinned tooling bundle ships these assemblies. Stage 7
-      replaces this with bundle presence/load/type-identity checks plus manifest versions.
-    -->
-    <ProjectReference Include="..\..\..\Cvolo\src\Cvolo.Observability.Abstractions\Cvolo.Observability.Abstractions.csproj" />
-    <ProjectReference Include="..\..\..\Cvolo\src\Cvolo.Observability\Cvolo.Observability.csproj" />
+    <!-- Single binary identity shared by the LSP and the verified Tooling bundle. -->
+    <Reference Include="Cvolo.Observability.Abstractions">
+      <HintPath>$(CvoloToolingDir)/Cvolo.Observability.Abstractions.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Cvolo.Observability">
+      <HintPath>$(CvoloToolingDir)/Cvolo.Observability.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

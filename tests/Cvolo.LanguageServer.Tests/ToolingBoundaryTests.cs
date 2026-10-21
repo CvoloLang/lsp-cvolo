@@ -19,6 +19,25 @@ public class ToolingBoundaryTests
         File.Exists(Path.Combine(AppContext.BaseDirectory, "Cvolo.Compiler.Tooling.dll"));
 
     [Fact]
+    public void ToolingBundle_AndLsp_UseTheSameObservabilityAssemblies()
+    {
+        if (!ManagedToolingAvailable)
+            return;
+
+        // Tests and the shipped server must resolve these contracts from the
+        // verified Tooling payload, never a different sibling compiler checkout.
+        var contractsPath = Path.Combine(AppContext.BaseDirectory, Contracts + ".dll");
+        var runtimePath = Path.Combine(AppContext.BaseDirectory, Runtime + ".dll");
+        Assert.True(File.Exists(contractsPath), $"Missing bundled contracts: {contractsPath}");
+        Assert.True(File.Exists(runtimePath), $"Missing bundled runtime: {runtimePath}");
+
+        var contractsFromBundle = Assembly.LoadFrom(contractsPath);
+        var runtimeFromBundle = Assembly.LoadFrom(runtimePath);
+        Assert.Same(typeof(global::Cvolo.Observability.Abstractions.ICompilerObserver).Assembly, contractsFromBundle);
+        Assert.Same(typeof(global::Cvolo.Observability.CompilerObserver).Assembly, runtimeFromBundle);
+    }
+
+    [Fact]
     public void CompilerToolingAssembly_LoadsFromDefaultAlc_AndTypeResolves()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Cvolo.Compiler.Tooling.dll");

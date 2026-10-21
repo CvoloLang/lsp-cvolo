@@ -33,4 +33,8 @@
   <Target Name="RequireCompilerCompatibilityLine" BeforeTargets="PrepareForBuild" Condition="'$(CompilerCompatibilityLine)' == ''">
     <Error Text="compiler-compatibility.version is missing or empty. It must contain the compiler line this LanguageServer release supports, for example 0.0.21." />
   </Target>
+  <!-- All projects compile against the same verified Tooling bundle assemblies.
+       Generated only by fetch-tooling or use-development-tooling; never committed. -->
+  <Import Project="$(MSBuildThisFileDirectory)artifacts/tooling-dir.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)artifacts/tooling-dir.props')" />
 </Project>

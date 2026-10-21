@@ -42,13 +42,15 @@ jobs:
           fi
 
       # Development tests use the exact Cvolo commit that passed full CI.
+      # This SHA provides Tooling 0.0.21.2 and the complete LSP event catalog.
+      # CI must not build 0.0.21.1 while tooling.version pins 0.0.21.2.
       # Tagged releases and master still use immutable verified Tooling assets.
       - name: Checkout CI-pinned development Tooling source
         if: startsWith(github.ref, 'refs/heads/develop/') || startsWith(github.base_ref, 'develop/')
         uses: actions/checkout@v4
         with:
           repository: IgorShaposhnikov/Cvolo
-          ref: b40db412215c3466807d3b03dba4f53b4334e406
+          ref: 5a111c12e7ec9aa7d37bc9eed1fbff19ecb2e204
           path: .dev-compiler
           persist-credentials: false
 
@@ -58,7 +60,7 @@ jobs:
         run: >
           ./build/use-development-tooling.ps1
           -CompilerSource ".dev-compiler"
-          -ExpectedCommit "b40db412215c3466807d3b03dba4f53b4334e406"
+          -ExpectedCommit "5a111c12e7ec9aa7d37bc9eed1fbff19ecb2e204"
 
       - name: Fetch pinned release Tooling
         if: "!startsWith(github.ref, 'refs/heads/develop/') && !startsWith(github.base_ref, 'develop/')"

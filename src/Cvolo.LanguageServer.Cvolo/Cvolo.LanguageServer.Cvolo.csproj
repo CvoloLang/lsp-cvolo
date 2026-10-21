@@ -17,7 +17,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cvolo.LanguageServer.Core\Cvolo.LanguageServer.Core.csproj" />
-    <ProjectReference Include="..\..\..\Cvolo\src\Cvolo.Observability.Abstractions\Cvolo.Observability.Abstractions.csproj" />
+    <Reference Include="Cvolo.Observability.Abstractions">
+      <HintPath>$(CvoloToolingDir)/Cvolo.Observability.Abstractions.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup Condition="'$(CvoloManagedToolingAvailable)' == 'true'">
