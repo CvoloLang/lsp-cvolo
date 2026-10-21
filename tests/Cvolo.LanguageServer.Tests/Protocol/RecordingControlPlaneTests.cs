@@ -54,6 +54,23 @@ public sealed class RecordingControlPlaneTests
             x.Event.Event == "recording.mode_changed" && x.RecordingEpoch == 1);
         Assert.Equal(0, observer.Catalog!.UnknownEvents);
         Assert.Equal(0, observer.Catalog.MissingFields);
+        // setRecording was received while Off, so its response must not become
+        // an orphan rpc.response.sent without requestUid.
+        Assert.DoesNotContain(trace, x => x.Event.Event == "rpc.response.sent"
+            && string.IsNullOrEmpty(x.Event.RequestUid));
+
+        // The next request is genuinely observed on both sides of the RPC
+        // boundary, with the same non-fabricated server-scoped identity.
+        await session.Client.TryUnknownRequestAsync();
+        var afterStart = new List<StampedEvent>();
+        queue.DrainAll(afterStart);
+        var inbound = Assert.Single(afterStart, x =>
+            x.Event.Event == "rpc.request.received"
+            && x.Event.Attributes?.Any(a => a.Key == "method" && a.Value == "cvolo/unknownRequest") == true);
+        var outbound = Assert.Single(afterStart, x => x.Event.Event == "rpc.response.sent");
+        Assert.NotNull(inbound.Event.RequestUid);
+        Assert.Equal(inbound.Event.RequestUid, outbound.Event.RequestUid);
+        Assert.Equal(0, observer.Catalog.MissingFields);
     }
 
     [Fact]

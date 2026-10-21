@@ -108,8 +108,15 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 		// correlation even then, without emitting an event in the disabled epoch.
 		var key = KeyOf(requestId);
 		var hasRequest = _pendingRequestUids.TryRemove(key, out var requestUid);
-		if (!enabled)
+		if (!enabled || !hasRequest)
+		{
+			// The request may have arrived while recording was Off, then
+			// completed after Start enabled it. There is no observed request
+			// identity to attach to this response. Never fabricate a UID or emit
+			// a malformed paired RPC event; normal requests arriving after the
+			// transition are fully correlated.
 			return;
+		}
 
 		_observer.Emit(new CompilerEvent
 		{
@@ -122,7 +129,7 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 			RpcRequestId = ToRpcRequestId(requestId),
 			Attributes =
 			[
-				new("method", hasRequest ? "response" : "response_without_received_request"),
+				new("method", "response"),
 			],
 		});
 	}
