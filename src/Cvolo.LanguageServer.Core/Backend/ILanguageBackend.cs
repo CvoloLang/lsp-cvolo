@@ -19,6 +19,12 @@ internal abstract class BackendProject
 /// </summary>
 internal abstract class BackendSnapshot
 {
+    /// <summary>
+    /// Stable identity originating from the language backend's actual immutable
+    /// snapshot, when that backend exposes it. Null means unknown. Generation
+    /// numbers, document versions and object hash codes are not snapshot ids.
+    /// </summary>
+    public virtual string? SnapshotId => null;
 }
 
 /// <summary>

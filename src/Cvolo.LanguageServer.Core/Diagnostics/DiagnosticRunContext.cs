@@ -14,6 +14,12 @@ internal sealed record DiagnosticRunContext(
     IReadOnlyList<DiagnosticPublishTarget> Targets)
 {
     /// <summary>
+    /// Identity of the exact captured backend snapshot, if supplied by that
+    /// backend. This is not inferred from the project generation or URI.
+    /// </summary>
+    public string? SnapshotId => CurrentProjectSnapshot.SnapshotId;
+
+    /// <summary>
     /// Analysis that produced this diagnostic run. Set by the worker after capture
     /// and carried unchanged through the publication callback. Null for callers
     /// outside an observed analysis; never invent a correlation id.

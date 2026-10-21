@@ -132,17 +132,17 @@ internal sealed class DiagnosticScheduler(
         try
         {
             BackendDocumentHandle[] handles = context.Targets.Select(target => target.Document).ToArray();
-            Emit(AnalysisStartedEvent, "started", analysisId: analysisId);
+            Emit(AnalysisStartedEvent, "started", analysisId: analysisId, snapshotId: context.SnapshotId);
             run = store.GetDiagnostics(context.CurrentProjectSnapshot, handles);
         }
         catch (Exception ex)
         {
-            Emit(AnalysisCompletedEvent, "faulted", ex.GetType().Name, analysisId);
+            Emit(AnalysisCompletedEvent, "faulted", ex.GetType().Name, analysisId, context.SnapshotId);
             HandleFailure(project, worker, context, analysisId, ex);
             return;
         }
 
-        Emit(AnalysisCompletedEvent, "success", analysisId: analysisId);
+        Emit(AnalysisCompletedEvent, "success", analysisId: analysisId, snapshotId: context.SnapshotId);
 
         // Successful computation resets failures even when it was superseded.
         worker.ResetFailures();
@@ -150,7 +150,7 @@ internal sealed class DiagnosticScheduler(
             logger.Info($"[diag] diagnostics available again for project '{project}' after a successful analysis.");
         if (_stopped || worker.IsStopped)
         {
-            Emit(DiagnosticsDiscardedEvent, "discarded", DiscardReasonStaleResult, analysisId);
+            Emit(DiagnosticsDiscardedEvent, "discarded", DiscardReasonStaleResult, analysisId, context.SnapshotId);
             return;
         }
 
@@ -165,12 +165,12 @@ internal sealed class DiagnosticScheduler(
                 });
             if (committed)
             {
-                Emit(DiagnosticsCommittedEvent, "committed", analysisId: analysisId);
+                Emit(DiagnosticsCommittedEvent, "committed", analysisId: analysisId, snapshotId: context.SnapshotId);
             }
             else
             {
                 logger.Debug($"[diag] discarded stale diagnostics for project '{project}'.");
-                Emit(DiagnosticsDiscardedEvent, "discarded", DiscardReasonStaleResult, analysisId);
+                Emit(DiagnosticsDiscardedEvent, "discarded", DiscardReasonStaleResult, analysisId, context.SnapshotId);
             }
         }
         catch (Exception ex)

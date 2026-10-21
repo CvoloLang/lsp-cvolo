@@ -67,7 +67,14 @@ public class DiagnosticPipelineObservabilityTests
         Assert.Equal(started.Event.AnalysisId, completed.Event.AnalysisId);
         var committed = Assert.Single(Named(events, "diagnostics.committed"));
         Assert.Equal(started.Event.AnalysisId, committed.Event.AnalysisId);
-        Assert.Equal(started.Event.AnalysisId, Assert.Single(harness.Publisher.Publishes).Context.AnalysisId);
+        var capturedContext = Assert.Single(harness.Publisher.Publishes).Context;
+        Assert.Equal(started.Event.AnalysisId, capturedContext.AnalysisId);
+        // A backend-supplied snapshot identity must be shared by analysis,
+        // commit and the actual captured immutable backend snapshot.
+        Assert.Equal(capturedContext.SnapshotId, started.Event.SnapshotId);
+        Assert.Equal(capturedContext.SnapshotId, completed.Event.SnapshotId);
+        Assert.Equal(capturedContext.SnapshotId, committed.Event.SnapshotId);
+        Assert.False(string.IsNullOrEmpty(capturedContext.SnapshotId));
         Assert.StartsWith(harness.Observer!.Identity.ServerInstanceId + "/analysis/", started.Event.AnalysisId!);
 
         AssertCatalogClean(harness.Observer);
@@ -86,7 +93,7 @@ public class DiagnosticPipelineObservabilityTests
         var publisher = new DiagnosticPublisher(new RecordingLspLogger(), sink, observer);
 
         var project = new FakeProject();
-        var snapshot = new FakeSnapshot(new Dictionary<DocumentUri, string>(DocumentUriPathComparer.Instance), 0);
+        var snapshot = new FakeSnapshot(new Dictionary<DocumentUri, string>(DocumentUriPathComparer.Instance), 0, "snapshot-from-test-backend");
         var target = new DiagnosticPublishTarget(DocA, new DocumentSessionId(1), new DocumentVersion(1), new FakeHandle(DocA));
         var context = new DiagnosticRunContext(project, snapshot, [target])
         {
@@ -127,15 +134,18 @@ public class DiagnosticPipelineObservabilityTests
         var attempt = Assert.Single(Named(events, "diagnostics.publish_attempt"));
         Assert.Equal("attempted", attempt.Event.Outcome);
         Assert.Equal(context.AnalysisId, attempt.Event.AnalysisId);
+        Assert.Equal(context.SnapshotId, attempt.Event.SnapshotId);
 
         var sent = Assert.Single(Named(events, "diagnostics.publish_sent"));
         Assert.Equal("sent", sent.Event.Outcome);
         Assert.Equal(context.AnalysisId, sent.Event.AnalysisId);
+        Assert.Equal(context.SnapshotId, sent.Event.SnapshotId);
         Assert.Equal("1", AttributeOf(sent, "diagnosticCount"));
         Assert.Equal("1", AttributeOf(sent, "documentCount"));
 
         var decision = Assert.Single(Named(events, "decision.diagnostics.publish"));
         Assert.Equal(context.AnalysisId, decision.Event.AnalysisId);
+        Assert.Equal(context.SnapshotId, decision.Event.SnapshotId);
         AssertCatalogClean(observer);
     }
 
@@ -201,6 +211,8 @@ public class DiagnosticPipelineObservabilityTests
         var fault = Assert.Single(Named(events, "diagnostics.publish_faulted"));
         Assert.Equal(context.AnalysisId, attempt.Event.AnalysisId);
         Assert.Equal(context.AnalysisId, fault.Event.AnalysisId);
+        Assert.Null(attempt.Event.SnapshotId);
+        Assert.Null(fault.Event.SnapshotId);
         Assert.DoesNotContain(events, e =>
             e.Event.Event is "diagnostics.publish_sent" or "diagnostics.clear_sent");
         AssertCatalogClean(observer);
@@ -364,7 +376,7 @@ public class DiagnosticPipelineObservabilityTests
                     [((FakeHandle)handle).Uri] = text,
                 };
                 Project.Generation++;
-                Project.Current = new FakeSnapshot(texts, Project.Generation);
+                Project.Current = new FakeSnapshot(texts, Project.Generation, $"captured-{Guid.NewGuid():N}");
                 return Project.Current;
             }
         }
@@ -421,11 +433,16 @@ public class DiagnosticPipelineObservabilityTests
         public FakeSnapshot Current { get; set; } = new(new Dictionary<DocumentUri, string>(), 0);
     }
 
-    private sealed class FakeSnapshot(IReadOnlyDictionary<DocumentUri, string> texts, long generation) : BackendSnapshot
+    private sealed class FakeSnapshot(
+        IReadOnlyDictionary<DocumentUri, string> texts, long generation, string? snapshotId = null) : BackendSnapshot
     {
         public IReadOnlyDictionary<DocumentUri, string> Texts { get; } = texts;
 
         public long Generation { get; } = generation;
+
+        // A test backend owns this identity; the LSP must pass it through
+        // unchanged instead of deriving it from the generation.
+        public override string? SnapshotId { get; } = snapshotId;
     }
 
     private sealed class FakeHandle(DocumentUri uri) : BackendDocumentHandle
