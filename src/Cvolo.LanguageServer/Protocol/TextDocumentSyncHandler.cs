@@ -122,13 +122,13 @@ internal sealed class TextDocumentSyncHandler(
         if (!TryCreateDocumentUri(item.Uri, out DocumentUri documentUri))
         {
             logger.Debug($"didOpen for a non-file document ('{item.Uri}') ignored.");
-            return Rejected(DidOpenEvent, "non_file_uri");
+            return Rejected(DidOpenEvent, "non_file_uri", item.Version);
         }
 
         if (!IsCvoloDocument(documentUri))
         {
             logger.Debug($"didOpen for non-cvolo document '{documentUri}' ignored.");
-            return Rejected(DidOpenEvent, "unsupported_language");
+            return Rejected(DidOpenEvent, "unsupported_language", item.Version);
         }
 
         if (!string.Equals(item.LanguageId, CvoloLanguageId, StringComparison.OrdinalIgnoreCase))
