@@ -122,7 +122,7 @@ public sealed class AdapterObservabilityTests : IDisposable
         BackendProject project = _backend.OpenProject(MainUri)!;
         BackendDocumentHandle handle = _backend.Resolve(project, MainUri);
         BackendSnapshot captured = _backend.UpdateDocument(project, handle, Text + "\n");
-        var identityProperty = typeof(Cvolo.Compiler.Tooling.ProjectSnapshot)
+        var identityProperty = typeof(global::Cvolo.Compiler.Tooling.ProjectSnapshot)
             .GetProperty("SnapshotId",
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
 

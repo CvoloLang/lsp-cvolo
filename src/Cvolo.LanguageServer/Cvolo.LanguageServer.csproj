@@ -8,8 +8,7 @@
   </PropertyGroup>
 
   <!-- Tooling location is produced by build/fetch-tooling.ps1|.sh. -->
-  <Import Project="$(MSBuildThisFileDirectory)..\..\artifacts\tooling-dir.props"
-          Condition="Exists('$(MSBuildThisFileDirectory)..\..\artifacts\tooling-dir.props')" />
+  
 
   <PropertyGroup>
     <CvoloManagedToolingAvailable Condition="'$(CvoloToolingDir)' != '' and Exists('$(CvoloToolingDir)/Cvolo.Compiler.Tooling.dll')">true</CvoloManagedToolingAvailable>
