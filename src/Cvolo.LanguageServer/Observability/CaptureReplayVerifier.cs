@@ -71,7 +71,7 @@ internal static class CaptureReplayVerifier
             }
             else if (!doc.HasObservedBaseline)
             {
-                issue = "did_open_not_observed";
+                issue ??= "did_open_not_observed";
             }
 
             if (!snapshot.IsDidOpen
