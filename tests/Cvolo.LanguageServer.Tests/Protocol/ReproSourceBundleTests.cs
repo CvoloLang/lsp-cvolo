@@ -37,9 +37,26 @@ public sealed class ReproSourceBundleTests
         Assert.DoesNotContain("secret/project", manifest);
         Assert.DoesNotContain("main.cvl", manifest);
         Assert.Contains("doc-0001/session-0002", manifest);
-        Assert.Contains("\\"replayComplete\\": false", manifest);
-        Assert.Contains("\\"semanticReplayCompleteness\\"", manifest);
-        Assert.Contains("\\"transportProducerClosed\\": false", manifest);
+        using var json = System.Text.Json.JsonDocument.Parse(manifest);
+        var root = json.RootElement;
+        Assert.False(root.GetProperty("replayComplete").GetBoolean());
+        Assert.True(root.TryGetProperty("semanticReplayCompleteness", out _));
+        Assert.False(root.GetProperty("transportProducerClosed").GetBoolean());
+    }
+
+    [Fact]
+    public void Hash_valid_baseline_only_archive_does_not_claim_edit_replay()
+    {
+        CapturedDocumentSnapshot[] snapshots =
+        [
+            new(Uri, 1, "source", CaptureReplayVerifier.ComputeDigest("source"), true),
+        ];
+        var bundle = ReproSourceBundle.Build(new CaptureExportSnapshot(
+            "lease", snapshots, CaptureReplayVerifier.Inspect(snapshots, true)));
+        var result = ReproSourceBundle.Verify(bundle.Bytes, bundle.ManifestSha256);
+        Assert.True(result.IntegrityValid);
+        Assert.Equal(1, result.VerifiedSources);
+        Assert.False(result.RetainedEditsReplayed);
     }
 
     [Fact]

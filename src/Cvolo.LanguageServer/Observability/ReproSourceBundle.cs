@@ -136,6 +136,7 @@ internal static class ReproSourceBundle
             var used = new HashSet<string>(StringComparer.Ordinal);
             var lastByDocument = new Dictionary<string, string>(StringComparer.Ordinal);
             int verified = 0;
+            int replayedEditBatches = 0;
             bool allReplayable = true;
             foreach (var record in manifest.Snapshots)
             {
@@ -167,6 +168,7 @@ internal static class ReproSourceBundle
                         || !string.Equals(replay, text, StringComparison.Ordinal))
                         return new(false, "utf16_edit_replay_mismatch", verified, false);
                     lastByDocument[record.DocumentId] = text;
+                    replayedEditBatches++;
                 }
                 else
                 {
@@ -177,7 +179,10 @@ internal static class ReproSourceBundle
             }
             if (used.Count != zip.Entries.Count - 1)
                 return new(false, "unreferenced_archive_member", verified, false);
-            return new(true, null, verified, allReplayable);
+            // A set of snapshots with zero edit batches cannot prove edit
+            // replay correctness, even if every individual digest matches.
+            return new(true, null, verified,
+                allReplayable && replayedEditBatches > 0);
         }
         catch (Exception error) when (error is InvalidDataException
             or JsonException or IOException or ArgumentException
