@@ -35,6 +35,28 @@ internal static class CaptureReplayVerifier
             }
 
             string? issue = null;
+            if (snapshot.IngressSequence is { } ingress)
+            {
+                if (doc.LastIngressSequence is { } previousIngress && ingress <= previousIngress)
+                    issue = "non_increasing_document_ingress";
+                doc.LastIngressSequence = ingress;
+            }
+            // Gaps are normal: ingress ordinals include unrelated RPC frames.
+            if (snapshot.IsDidClose)
+            {
+                if (!doc.HasObservedBaseline)
+                    issue ??= "close_without_observed_open";
+                doc.HasObservedBaseline = false;
+                doc.LastText = null;
+                doc.LastVersion = null;
+                doc.Count++;
+                doc.AnyIssue |= issue is not null;
+                firstIssue ??= issue;
+                entries.Add(new CaptureSnapshotEvidence(doc.Id, snapshot.Version,
+                    "did_close", 0, snapshot.Sha256Utf16Le, issue, null,
+                    snapshot.IngressSequence));
+                continue;
+            }
             if (!string.Equals(
                 ComputeDigest(snapshot.Text), snapshot.Sha256Utf16Le,
                 StringComparison.Ordinal))
@@ -87,7 +109,7 @@ internal static class CaptureReplayVerifier
                 doc.Id, snapshot.Version,
                 snapshot.IsDidOpen ? "did_open" : "did_change",
                 snapshot.Text.Length, snapshot.Sha256Utf16Le, issue,
-                snapshot.AppliedChanges?.Count));
+                snapshot.AppliedChanges?.Count, snapshot.IngressSequence));
         }
 
         var documents = perDocument.Values.Select(d => new CaptureDocumentEvidence(
@@ -108,6 +130,7 @@ internal static class CaptureReplayVerifier
             [
                 "some_utf16_edit_batches_may_not_be_retained",
                 "notification_stream_completeness_not_proven",
+                "ingress_gaps_include_non_document_rpc_frames",
                 "snapshot_hashes_do_not_prove_original_editor_inputs",
                 "document_uris_and_raw_source_omitted",
             ]);
@@ -122,6 +145,7 @@ internal static class CaptureReplayVerifier
         internal string? LastText;
         internal int VerifiedEdits;
         internal bool HasObservedBaseline;
+        internal long? LastIngressSequence;
         internal bool AnyIssue;
     }
 }
@@ -129,7 +153,7 @@ internal static class CaptureReplayVerifier
 internal sealed record CaptureSnapshotEvidence(
     string DocumentId, int Version, string InputKind,
     int Utf16CodeUnits, string Sha256Utf16Le, string? Issue,
-    int? CapturedEdits);
+    int? CapturedEdits, long? IngressSequence = null);
 
 internal sealed record CaptureDocumentEvidence(
     string DocumentId, int CapturedSnapshots, int ObservedDidOpens,
