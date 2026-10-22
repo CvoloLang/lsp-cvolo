@@ -276,7 +276,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     /// <summary>Never emits source text; retains bounded snapshots in RAM only.</summary>
     internal void CaptureCommittedDocument(
         Uri? uri, int version, string? text, bool isDidOpen,
-        IReadOnlyList<Cvolo.LanguageServer.Core.Documents.DocumentChange>? changes)
+        IReadOnlyList<global::Cvolo.LanguageServer.Core.Documents.DocumentChange>? changes)
         => _captureConsent.CaptureCommitted(uri, version, text, isDidOpen, changes);
 
     internal CaptureReplayEvidence VerifyCaptureJournal()
