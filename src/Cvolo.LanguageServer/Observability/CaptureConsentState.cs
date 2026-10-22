@@ -177,7 +177,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     /// </summary>
     internal void CaptureCommitted(
         Uri? uri, int version, string? sourceText,
-        bool isDidOpen = false, IReadOnlyList<DocumentChange>? appliedChanges = null)
+        bool isDidOpen = false, IReadOnlyList<DocumentChange>? appliedChanges = null,
+        long? ingressSequence = null)
     {
         if (uri is null || sourceText is null)
             return;
@@ -209,6 +210,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                     break;
                 }
             }
+            // Ingress IDs cover all RPC frames, not just document edits.
+            if (ingressSequence is <= 0) ingressSequence = null;
             // Reopening a document starts a new lifetime; its version can
             // legitimately restart at 1 after the preceding didClose.
             if (!isDidOpen && previous is not null && version <= previous.Version)
@@ -252,8 +255,41 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
 
             _journal.Add(new(uri.AbsoluteUri, version, sourceText,
                 CaptureReplayVerifier.ComputeDigest(sourceText), isDidOpen,
-                capturedChanges));
+                capturedChanges, ingressSequence));
             _journalChars += sourceText.Length + editCharacters;
+        }
+    }
+
+    /// <summary>Retain a successful close boundary without retaining any source text.</summary>
+    internal void CaptureClosed(Uri? uri, long? ingressSequence = null)
+    {
+        if (uri is null) return;
+        lock (_gate)
+        {
+            ExpireIfNeeded();
+            if (!_journalArmed || !_allowSources || _documents is null
+                || !uri.IsAbsoluteUri || !_documents.Contains(uri.AbsoluteUri))
+                return;
+            if (_journal.Count >= MaxJournalSnapshots)
+            {
+                _journalIncomplete = true;
+                return;
+            }
+            CapturedDocumentSnapshot? last = null;
+            for (int i = _journal.Count - 1; i >= 0; i--)
+                if (string.Equals(_journal[i].DocumentUri, uri.AbsoluteUri, StringComparison.Ordinal))
+                {
+                    last = _journal[i];
+                    break;
+                }
+            if (last is null || last.IsDidClose)
+            {
+                _journalIncomplete = true;
+                return;
+            }
+            _journal.Add(new(uri.AbsoluteUri, last.Version, string.Empty,
+                CaptureReplayVerifier.ComputeDigest(string.Empty), false, null,
+                ingressSequence is > 0 ? ingressSequence : null, true));
         }
     }
 
@@ -380,4 +416,5 @@ internal sealed record CaptureJournalAck(
 internal sealed record CapturedDocumentSnapshot(
     string DocumentUri, int Version, string Text,
     string Sha256Utf16Le, bool IsDidOpen,
-    IReadOnlyList<DocumentChange>? AppliedChanges = null);
+    IReadOnlyList<DocumentChange>? AppliedChanges = null,
+    long? IngressSequence = null, bool IsDidClose = false);
