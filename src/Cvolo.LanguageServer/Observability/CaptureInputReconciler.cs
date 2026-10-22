@@ -64,8 +64,8 @@ internal static class CaptureInputReconciler
             lastByDocument[input.DocumentUri] = sequence;
             if (!observed.Add(key))
                 issue ??= "duplicate_document_input_ingress";
-            if (duplicateSnapshotKeys.Contains(key))
-                issue ??= "duplicate_retained_snapshot_ingress";
+            // Do not retroactively attribute a duplicate snapshot to the first input.
+            // Evaluate duplicate snapshots only after processing the input sequence.
 
             bool hasSnapshot = byIngress.TryGetValue(key, out var snapshot);
             if (input.Outcome == "applied")
@@ -92,6 +92,22 @@ internal static class CaptureInputReconciler
             {
                 firstIssue = issue;
                 firstIssueIngress = sequence;
+            }
+        }
+
+        if (firstIssue is null && duplicateSnapshotKeys.Count > 0)
+        {
+            var seenSnapshotKeys = new HashSet<(string Uri, long Sequence)>();
+            foreach (var snapshot in snapshots)
+            {
+                if (snapshot.IngressSequence is not > 0) continue;
+                var key = (snapshot.DocumentUri, snapshot.IngressSequence.Value);
+                if (!seenSnapshotKeys.Add(key))
+                {
+                    firstIssue = "duplicate_retained_snapshot_ingress";
+                    firstIssueIngress = snapshot.IngressSequence;
+                    break;
+                }
             }
         }
 
