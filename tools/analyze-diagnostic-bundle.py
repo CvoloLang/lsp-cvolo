@@ -10,6 +10,7 @@ import json
 import re
 import sys
 import zipfile
+from causal_graph import make_graph, marker_request_candidates
 from pathlib import Path
 from datetime import datetime
 
@@ -20,6 +21,7 @@ WORD = re.compile(r"[a-z][a-z0-9_.-]{0,90}\Z")
 MARKER = re.compile(r"marker-[a-f0-9]{32}\Z")
 REQUEST = re.compile(r"[a-f0-9]{32}/rpc/[0-9]{1,16}\Z")
 OP = re.compile(r"(?:op|snap|analysis|idx|index|gen)-[a-zA-Z0-9._-]{1,100}\Z")
+ANALYSIS = re.compile(r"[a-f0-9]{32}/analysis/[0-9]{1,16}\Z")
 
 
 class BundleError(ValueError):
@@ -150,24 +152,25 @@ def analyze(path):
                 "markerId": safe_id(row.get("clientActionId"), MARKER),
                 "requestUid": safe_id(row.get("requestUid"), REQUEST),
                 "operationId": safe_id(row.get("operationId"), OP),
+                "parentOperationId": safe_id(row.get("parentOperationId"), OP),
+                "analysisId": safe_id(row.get("analysisId"), ANALYSIS),
                 "snapshotId": safe_id(row.get("snapshotId"), OP),
+                "stage": word(row.get("stage")),
+                "documentVersion": row.get("documentVersion") if type(row.get("documentVersion")) is int and row["documentVersion"] >= 0 else None,
                 "category": word(attrs.get("category") if isinstance(attrs, dict) else None)
             })
     # Physical JSONL order is not producer order: P0 can overtake P1/P2.
     records.sort(key=lambda e: (e["_emitter"], e["_seq"]))
+    graph, request_events = make_graph(records)
     markers = []
     for marker in (x for x in records if x["event"] == "diagnostic.marker" and x["markerId"]):
-        nearby = []
-        for item in records:
-            if item is marker or item["_emitter"] != marker["_emitter"] or item["_time"] is None or marker["_time"] is None:
-                continue
-            if abs(item["_time"] - marker["_time"]) <= 10000 and len(nearby) < 500:
-                nearby.append({key: item[key] for key in ("eventRef", "event", "outcome", "reason", "requestUid", "operationId", "snapshotId")} | {"relation": "temporal_only"})
-        fault = next((x for x in nearby if x["outcome"] in ("faulted", "rejected", "not_found") or x["event"].endswith(".faulted")), None)
+        nearby_events, request_candidates = marker_request_candidates(marker, records, request_events)
+        nearby = [{k: e[k] for k in ("eventRef", "event", "outcome", "reason", "requestUid", "operationId", "snapshotId")} | {"relation": "temporal_only"} for e in nearby_events]
+        fault = next((e for e in nearby if e["outcome"] in ("faulted", "rejected", "not_found") or e["event"].endswith(".faulted")), None)
         markers.append({
             "markerId": marker["markerId"], "category": marker["category"],
             "eventRef": marker["eventRef"], "recordingEpoch": marker["recordingEpoch"],
-            "incidentWindowMs": 10000, "association": "temporal_only", "candidates": nearby,
+            "incidentWindowMs": 10000, "association": "temporal_only", "candidates": nearby, "requestCandidates": request_candidates,
             "firstKnownFailure": {"eventRef": fault["eventRef"], "reason": fault["reason"],
                                   "outcome": fault["outcome"], "evidence": "observed_outcome_not_root_cause"} if fault else None,
             "rootCause": "insufficient_evidence"
@@ -224,7 +227,23 @@ def analyze(path):
     if not markers:
         summary.append("No valid diagnostic.marker found in retained segments.")
     summary.append("")
-    return {"integrity.json": integrity, "incident-index.json": index, "summary.md": "\n".join(summary)}
+    summary += ["", "## Observed request chains", ""]
+    for req in graph["requests"][:200]:
+        failure = req["firstObservedFailure"]
+        finding = ("first observed failure " + failure["eventRef"] + " outcome=" + failure["outcome"] + " reason=" + failure["reason"]) if failure else ("no explicit failure; terminal " + ("observed" if req["terminalObserved"] else "not observed"))
+        summary.append("- " + req["requestUid"] + ": " + finding + "; root cause unproven.")
+    summary_text = "\n".join(summary) + "\n"
+    report = ("CVOLO DIAGNOSTIC REPORT v1\n"
+              "CAUTION: marker proximity is temporal, not causal; privacy and replay completeness are unverified.\n\n"
+              + summary_text + "\nINTEGRITY\n"
+              + json.dumps(integrity, sort_keys=True, indent=2) + "\n\nINCIDENT INDEX\n"
+              + json.dumps(index, sort_keys=True, indent=2) + "\n\nOPERATION GRAPH\n"
+              + json.dumps(graph, sort_keys=True, indent=2)
+              + "\n\nFULL EVENT TIMELINE: not embedded; original verified ZIP required. "
+                "This standalone report is incomplete for replay.\n")
+    return {"integrity.json": integrity, "incident-index.json": index,
+            "operations.json": graph, "summary.md": summary_text,
+            "diagnostic-report.txt": report}
 
 
 def main(argv=None):

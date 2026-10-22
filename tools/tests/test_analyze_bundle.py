@@ -100,7 +100,7 @@ class AnalyzerTests(unittest.TestCase):
             run = subprocess.run([sys.executable, str(SCRIPT), str(f), str(dest)],
                                  capture_output=True, text=True)
             self.assertEqual(0, run.returncode, run.stderr)
-            self.assertEqual({"summary.md", "integrity.json", "incident-index.json"},
+            self.assertEqual({"summary.md", "integrity.json", "incident-index.json", "operations.json", "diagnostic-report.txt"},
                              {p.name for p in dest.iterdir()})
             self.assertEqual(1, len(json.loads((dest / "incident-index.json").read_text())["markers"]))
 
@@ -111,6 +111,49 @@ class AnalyzerTests(unittest.TestCase):
                      lambda m: m.update(formatVersion=2))
             with self.assertRaisesRegex(analyzer.BundleError, "unsupported_bundle_format"):
                 analyzer.analyze(f)
+
+
+    def test_explicit_f12_failure_keeps_evidence_ref_and_producer_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "test.zip"
+            uid = "a"*32 + "/rpc/42"
+            make_zip(f, [
+                event(4, "rpc.response.sent", requestUid=uid, outcome="success"),
+                event(1, "rpc.request.received", requestUid=uid, outcome="received"),
+                event(2, "request.started", requestUid=uid, operationId="op-1", stage="definition", outcome="started"),
+                event(3, "request.completed", requestUid=uid, operationId="op-1", stage="definition",
+                      outcome="not_found", reason="symbol_lookup_miss")
+            ])
+            data = analyzer.analyze(f)
+            req = data["operations.json"]["requests"][0]
+            self.assertEqual("events/segment-0000.jsonl:4", req["firstObservedFailure"]["eventRef"])
+            self.assertTrue(req["terminalObserved"])
+            self.assertEqual(4, len(req["eventRefs"]))
+            self.assertIn("symbol_lookup_miss", data["diagnostic-report.txt"])
+            self.assertIn("FULL EVENT TIMELINE: not embedded", data["diagnostic-report.txt"])
+
+    def test_temporal_marker_does_not_prove_request_cause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "test.zip"
+            uid = "a"*32 + "/rpc/42"
+            make_zip(f, [event(1, "request.completed", requestUid=uid,
+                               outcome="not_found", reason="symbol_lookup_miss"),
+                         event(2, "diagnostic.marker", clientActionId="marker-" + "b"*32,
+                               attributes={"category": "definition"})])
+            entry = analyzer.analyze(f)["incident-index.json"]["markers"][0]["requestCandidates"][0]
+            self.assertEqual("temporal_only", entry["relation"])
+            self.assertEqual("insufficient_evidence", entry["rootCause"])
+            self.assertEqual("symbol_lookup_miss", entry["firstObservedFailure"]["reason"])
+
+    def test_shared_snapshot_never_joins_independent_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "test.zip"
+            a, b = "a"*32+"/rpc/1", "a"*32+"/rpc/2"
+            make_zip(f, [event(1, "request.started", requestUid=a, snapshotId="snap-1"),
+                         event(2, "request.started", requestUid=b, snapshotId="snap-1")])
+            graph = analyzer.analyze(f)["operations.json"]
+            self.assertEqual(2, graph["requestCount"])
+            self.assertFalse(graph["requests"][0]["terminalObserved"])
 
 
 if __name__ == "__main__":

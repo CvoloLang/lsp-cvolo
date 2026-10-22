@@ -11,3 +11,5 @@ Requires Python 3.11+ only; no VS Code, Compiler, .NET SDK or network access.
 Outputs: `integrity.json` (hash checks, gaps, bad records), `incident-index.json` (markers and temporal candidates), `summary.md` (privacy-filtered preliminary findings).
 
 **Limitations:** The archive's manifest has no independently trusted signature. Hash checks cannot prove replay completeness or privacy. Within-emitter producerSequence, not physical file order, governs event ordering. Nearby events are `temporal_only`, never automatically causal; unresolved causes are `insufficient_evidence`. This first pass does not reconstruct the full dependency DAG, independently calibrate clocks, or replay source changes. Raw attributes and source text are not copied to the summary.
+
+The analyzer also writes `operations.json` (explicit request/operation ownership and observed first failures) and `diagnostic-report.txt` (portable evidence summary). The text report explicitly **omits the complete raw timeline**, so it cannot be used alone for replay; retain the original verified ZIP. Snapshot sharing does not imply request causation, and markers have `temporal_only` associations.
