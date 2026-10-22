@@ -72,6 +72,13 @@ jobs:
             bash build/fetch-tooling.sh
           fi
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Test standalone diagnostic analyzer
+        run: python -m unittest discover -s tools/tests -v
+
       - name: Restore (locked)
         run: dotnet restore src/Cvolo.LanguageServer.slnx --locked-mode -p:ContinuousIntegrationBuild=true
 
