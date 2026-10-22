@@ -60,7 +60,7 @@ internal static class CaptureReplayVerifier
                 ComputeDigest(snapshot.Text), snapshot.Sha256Utf16Le,
                 StringComparison.Ordinal))
             {
-                issue = "snapshot_digest_mismatch";
+                issue ??= "snapshot_digest_mismatch";
             }
             else if (snapshot.IsDidOpen)
             {
@@ -132,7 +132,11 @@ internal static class CaptureReplayVerifier
                 "ingress_gaps_include_non_document_rpc_frames",
                 "snapshot_hashes_do_not_prove_original_editor_inputs",
                 "document_uris_and_raw_source_omitted",
-            ]);
+            ],
+            TraceCompleteness: problems ? "partial" : "unknown",
+            DocumentReplayCompleteness: problems || journalIncomplete ? "partial" : "unknown",
+            ProjectInputsCompleteness: "unknown",
+            SemanticReplayCompleteness: "unknown");
     }
 
     private sealed class DocumentEvidenceBuilder(string id)
@@ -165,4 +169,8 @@ internal sealed record CaptureReplayEvidence(
     string DigestAlgorithm, string? FirstObservedIssue,
     IReadOnlyList<CaptureDocumentEvidence> Documents,
     IReadOnlyList<CaptureSnapshotEvidence> Snapshots,
-    IReadOnlyList<string> Limitations);
+    IReadOnlyList<string> Limitations,
+    string TraceCompleteness = "unknown",
+    string DocumentReplayCompleteness = "unknown",
+    string ProjectInputsCompleteness = "unknown",
+    string SemanticReplayCompleteness = "unknown");
