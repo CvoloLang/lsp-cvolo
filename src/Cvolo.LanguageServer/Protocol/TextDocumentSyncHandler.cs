@@ -33,7 +33,8 @@ internal sealed class TextDocumentSyncHandler(
     Func<OrderedInputQueue?>? inputQueueAccessor = null,
     ICompilerObserver? observer = null,
     Action<Uri, int, string, bool, IReadOnlyList<DocumentChange>?, long?>? onAppliedDocument = null,
-    Action<Uri, long?>? onClosedDocument = null) : IDisposable
+    Action<Uri, long?>? onClosedDocument = null,
+    Action<Uri?, string, string, int?, long?>? onSettledDocument = null) : IDisposable
 {
     private const string CvoloLanguageId = "cvolo";
 
@@ -85,31 +86,67 @@ internal sealed class TextDocumentSyncHandler(
 
     [JsonRpcMethod(Methods.TextDocumentDidOpenName, UseSingleObjectParameterDeserialization = true)]
     public void DidOpen(DidOpenTextDocumentParams? parameters)
-        { IngressSequence ingress = IngressScope.Current; DispatchInput(ingress, () => ApplyDidOpen(parameters, ingress)); }
+    {
+        IngressSequence ingress = IngressScope.Current;
+        DispatchInput(ingress, parameters?.TextDocument?.Uri, "did_open",
+            parameters?.TextDocument?.Version, () => ApplyDidOpen(parameters, ingress));
+    }
 
     [JsonRpcMethod(Methods.TextDocumentDidChangeName, UseSingleObjectParameterDeserialization = true)]
     public void DidChange(DidChangeTextDocumentParams? parameters)
-        { IngressSequence ingress = IngressScope.Current; DispatchInput(ingress, () => ApplyDidChange(parameters, ingress)); }
+    {
+        IngressSequence ingress = IngressScope.Current;
+        DispatchInput(ingress, parameters?.TextDocument?.Uri, "did_change",
+            parameters?.TextDocument?.Version, () => ApplyDidChange(parameters, ingress));
+    }
 
     [JsonRpcMethod(Methods.TextDocumentDidCloseName, UseSingleObjectParameterDeserialization = true)]
     public void DidClose(DidCloseTextDocumentParams? parameters)
-        { IngressSequence ingress = IngressScope.Current; DispatchInput(ingress, () => ApplyDidClose(parameters, ingress)); }
+    {
+        IngressSequence ingress = IngressScope.Current;
+        DispatchInput(ingress, parameters?.TextDocument?.Uri, "did_close",
+            null, () => ApplyDidClose(parameters, ingress));
+    }
 
     /// <summary>
     /// Applies an input through the ordered writer when an ingress queue is present;
     /// otherwise (direct/unit invocation) applies it immediately. The apply function
     /// always reports applied or rejected so the admitted frame always settles.
     /// </summary>
-    private void DispatchInput(IngressSequence sequence, Func<InputDisposition> apply)
+    private void DispatchInput(IngressSequence sequence, Uri? uri, string kind,
+        int? version, Func<InputDisposition> apply)
     {
+        InputDisposition ApplyAndObserve()
+        {
+            string outcome = "faulted";
+            try
+            {
+                InputDisposition result = apply();
+                outcome = result == InputDisposition.Applied ? "applied" : "rejected";
+                return result;
+            }
+            finally
+            {
+                // Even when document application throws, the capture journal
+                // observes the real settled/faulted outcome, never a fabricated
+                // successful snapshot. Observer failures cannot change LSP.
+                try
+                {
+                    onSettledDocument?.Invoke(uri, kind, outcome, version,
+                        sequence.IsNone ? null : sequence.Value);
+                }
+                catch (Exception) { }
+            }
+        }
+
         OrderedInputQueue? queue = inputQueueAccessor?.Invoke();
         if (queue is null || sequence.IsNone)
         {
-            apply();
+            ApplyAndObserve();
             return;
         }
 
-        queue.Attach(sequence, apply);
+        queue.Attach(sequence, ApplyAndObserve);
     }
 
     private InputDisposition ApplyDidOpen(DidOpenTextDocumentParams? parameters, IngressSequence ingress)

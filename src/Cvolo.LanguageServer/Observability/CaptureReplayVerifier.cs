@@ -18,7 +18,9 @@ internal static class CaptureReplayVerifier
             .ToLowerInvariant();
 
     internal static CaptureReplayEvidence Inspect(
-        IReadOnlyList<CapturedDocumentSnapshot> snapshots, bool journalIncomplete)
+        IReadOnlyList<CapturedDocumentSnapshot> snapshots, bool journalIncomplete,
+        IReadOnlyList<CapturedDocumentInput>? inputs = null,
+        bool inputLedgerIncomplete = false)
     {
         var perDocument = new Dictionary<string, DocumentEvidenceBuilder>(StringComparer.Ordinal);
         var entries = new List<CaptureSnapshotEvidence>(snapshots.Count);
@@ -114,7 +116,9 @@ internal static class CaptureReplayVerifier
         var documents = perDocument.Values.Select(d => new CaptureDocumentEvidence(
             d.Id, d.Count, d.Segments, d.HasObservedBaseline,
             d.LastVersion, d.AnyIssue, d.VerifiedEdits)).ToArray();
-        bool problems = firstIssue is not null;
+        CaptureInputReconciliation reconciliation = CaptureInputReconciler.Reconcile(
+            inputs ?? Array.Empty<CapturedDocumentInput>(), snapshots);
+        bool problems = firstIssue is not null || reconciliation.FirstIssue is not null;
         return new CaptureReplayEvidence(
             ProtocolVersion: 1,
             Status: problems ? "retained_snapshot_issues" : "retained_snapshots_inspected",
@@ -122,7 +126,7 @@ internal static class CaptureReplayVerifier
             HistoryPrefixUnknown: journalIncomplete,
             CapturedSnapshots: snapshots.Count,
             DigestAlgorithm: DigestAlgorithm,
-            FirstObservedIssue: firstIssue,
+            FirstObservedIssue: firstIssue ?? reconciliation.FirstIssue,
             Documents: documents,
             Snapshots: entries.ToArray(),
             Limitations:
@@ -132,11 +136,14 @@ internal static class CaptureReplayVerifier
                 "ingress_gaps_include_non_document_rpc_frames",
                 "snapshot_hashes_do_not_prove_original_editor_inputs",
                 "document_uris_and_raw_source_omitted",
+                "input_receipts_do_not_prove_transport_capture_completeness",
             ],
-            TraceCompleteness: problems ? "partial" : "unknown",
-            DocumentReplayCompleteness: problems || journalIncomplete ? "partial" : "unknown",
+            TraceCompleteness: problems || inputLedgerIncomplete ? "partial" : "unknown",
+            DocumentReplayCompleteness: problems || journalIncomplete || inputLedgerIncomplete ? "partial" : "unknown",
             ProjectInputsCompleteness: "unknown",
-            SemanticReplayCompleteness: "unknown");
+            SemanticReplayCompleteness: "unknown",
+            InputReconciliation: reconciliation,
+            InputLedgerIncomplete: inputLedgerIncomplete);
     }
 
     private sealed class DocumentEvidenceBuilder(string id)
@@ -173,4 +180,6 @@ internal sealed record CaptureReplayEvidence(
     string TraceCompleteness = "unknown",
     string DocumentReplayCompleteness = "unknown",
     string ProjectInputsCompleteness = "unknown",
-    string SemanticReplayCompleteness = "unknown");
+    string SemanticReplayCompleteness = "unknown",
+    CaptureInputReconciliation? InputReconciliation = null,
+    bool InputLedgerIncomplete = false);

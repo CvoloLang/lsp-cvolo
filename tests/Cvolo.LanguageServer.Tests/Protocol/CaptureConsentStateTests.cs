@@ -374,6 +374,52 @@ public sealed class CaptureConsentStateTests
         Assert.Equal(0, result.Snapshots[1].Utf16CodeUnits);
     }
 
+    [Fact]
+    public void Actual_captured_outcomes_are_reconciled_with_source_snapshots()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "start", isDidOpen: true,
+            ingressSequence: 10);
+        state.CaptureSettled(new Uri(Document), "did_open", "applied", 1, 10);
+        state.CaptureSettled(new Uri(Document), "did_change", "rejected", 2, 11);
+        state.CaptureSettled(new Uri(Document), "did_change", "applied", 3, 12);
+
+        var evidence = state.InspectReplay();
+        Assert.Equal("applied_input_snapshot_missing", evidence.InputReconciliation!.FirstIssue);
+        Assert.Equal(12L, evidence.InputReconciliation.FirstIssueIngressSequence);
+        Assert.Equal("partial", evidence.DocumentReplayCompleteness);
+        Assert.False(evidence.ReplayComplete);
+        Assert.Equal(3, state.Status().CapturedInputOutcomes);
+    }
+
+    [Fact]
+    public void Input_receipts_are_bounded_and_removed_on_revoke()
+    {
+        var state = ArmedJournal();
+        for (int i = 0; i <= CaptureConsentState.MaxInputReceipts; i++)
+            state.CaptureSettled(new Uri(Document), "did_change", "rejected", i, i + 1);
+
+        Assert.True(state.Status().InputLedgerIncomplete);
+        Assert.Equal(CaptureConsentState.MaxInputReceipts, state.Status().CapturedInputOutcomes);
+        Assert.Equal("partial", state.InspectReplay().TraceCompleteness);
+        state.Revoke(new CaptureConsentRevoke
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+        }, ServerId);
+        Assert.Equal(0, state.Status().CapturedInputOutcomes);
+        Assert.Empty(state.InspectReplay().Snapshots);
+    }
+
+    [Fact]
+    public void Out_of_scope_input_receipts_are_never_retained()
+    {
+        var state = ArmedJournal();
+        state.CaptureSettled(new Uri("file:///C:/project/unrelated.cvl"),
+            "did_change", "rejected", 2, 5);
+        Assert.Equal(0, state.Status().CapturedInputOutcomes);
+        Assert.Equal(0, state.InspectReplay().InputReconciliation!.ObservedInputs);
+    }
+
     private static CaptureConsentState ArmedJournal()
     {
         var state = new CaptureConsentState();

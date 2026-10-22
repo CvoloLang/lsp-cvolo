@@ -19,6 +19,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     internal const int MaxJournalChars = 1024 * 1024;
     internal const int MaxBatchEdits = 64;
     internal const int MaxJournalEdits = 256;
+    internal const int MaxInputReceipts = 128;
     private readonly Func<DateTimeOffset> _utcNow = clock ?? (() => DateTimeOffset.UtcNow);
     private readonly object _gate = new();
     private HashSet<string>? _documents;
@@ -31,6 +32,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     private bool _journalIncomplete;
     private int _journalChars;
     private int _journalEditCount;
+    private bool _inputLedgerIncomplete;
+    private readonly List<CapturedDocumentInput> _inputLedger = [];
     private readonly List<CapturedDocumentSnapshot> _journal = [];
 
     internal CaptureConsentStatus Status()
@@ -55,7 +58,9 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 CapturedCharacters: _journalChars,
                 JournalIncomplete: _journalIncomplete,
                 InMemoryJournalSupported: true,
-                SourceExportSupported: false);
+                SourceExportSupported: false,
+                CapturedInputOutcomes: _inputLedger.Count,
+                InputLedgerIncomplete: _inputLedgerIncomplete);
         }
     }
 
@@ -158,6 +163,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
             if (!_journalArmed)
             {
                 _journal.Clear();
+                _inputLedger.Clear();
+                _inputLedgerIncomplete = false;
                 _journalChars = 0;
                 _journalEditCount = 0;
                 // We cannot reconstruct pre-arm document changes. The future
@@ -260,6 +267,34 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         }
     }
 
+    /// <summary>
+    /// Retains only bounded machine outcomes of scoped, server-settled
+    /// notifications. Rejected changes never require storing their payload.
+    /// Called after application, and never from under DocumentStore locks.
+    /// </summary>
+    internal void CaptureSettled(
+        Uri? uri, string kind, string outcome, int? version, long? ingressSequence)
+    {
+        if (uri is null) return;
+        lock (_gate)
+        {
+            ExpireIfNeeded();
+            if (!_journalArmed || !_allowSources || _documents is null
+                || !uri.IsAbsoluteUri || !uri.IsFile
+                || !_documents.Contains(uri.AbsoluteUri))
+                return;
+
+            if (_inputLedger.Count >= MaxInputReceipts)
+            {
+                _inputLedgerIncomplete = true;
+                _journalIncomplete = true;
+                return;
+            }
+            _inputLedger.Add(new CapturedDocumentInput(uri.AbsoluteUri, kind, outcome,
+                version, ingressSequence is > 0 ? ingressSequence : null));
+        }
+    }
+
     /// <summary>Retain a successful close boundary without retaining any source text.</summary>
     internal void CaptureClosed(Uri? uri, long? ingressSequence = null)
     {
@@ -299,7 +334,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         lock (_gate)
         {
             ExpireIfNeeded();
-            return CaptureReplayVerifier.Inspect(_journal, _journalIncomplete);
+            return CaptureReplayVerifier.Inspect(
+                _journal, _journalIncomplete, _inputLedger, _inputLedgerIncomplete);
         }
     }
 
@@ -337,6 +373,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     private void Clear()
     {
         _journal.Clear();
+        _inputLedger.Clear();
+        _inputLedgerIncomplete = false;
         _journalChars = 0;
         _journalEditCount = 0;
         _journalArmed = false;
@@ -384,7 +422,9 @@ internal sealed record CaptureConsentStatus(
     int CapturedCharacters,
     bool JournalIncomplete,
     bool InMemoryJournalSupported,
-    bool SourceExportSupported);
+    bool SourceExportSupported,
+    int CapturedInputOutcomes = 0,
+    bool InputLedgerIncomplete = false);
 
 internal sealed record CaptureConsentAck(
     int ProtocolVersion,
