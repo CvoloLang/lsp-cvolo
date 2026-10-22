@@ -21,6 +21,32 @@ internal sealed class PingTarget
 public sealed class IngressSynchronizationContextTests
 {
     [Fact]
+    public async Task Unrelated_rpc_frames_do_not_poison_later_input_barriers()
+    {
+        var target = new PingTarget();
+        using var session = ProtocolSession.Start(
+            configureRpc: rpc => rpc.AddLocalRpcTarget(target));
+        for (int i = 0; i < 12; i++)
+            session.Client.SendRawJson(
+                $@"{{""jsonrpc"":""2.0"",""method"":""ping"",""params"":[{i}]}}");
+
+        await session.Client.WaitUntilAsync(
+            () => target.Observed.Count == 12,
+            "unrelated frames delivered", TimeSpan.FromSeconds(5));
+
+        // A read-only capture checkpoint must not block just because the
+        // transport previously received requests unrelated to document edits.
+        // This catches speculative FIFO pairing/pre-admission regressions.
+        var checkpoint = await TestTasks.WithTimeout(
+            session.Client.VerifyCaptureCheckpointAsync(),
+            "verification checkpoint after unrelated frames",
+            TimeSpan.FromSeconds(5));
+
+        Assert.Equal("satisfied", (string?)checkpoint["verificationBarrier"]?["status"]);
+        Assert.False((bool)checkpoint["replayComplete"]!);
+    }
+
+    [Fact]
     public async Task Frames_AreStampedInReceiveOrder()
     {
         var target = new PingTarget();
