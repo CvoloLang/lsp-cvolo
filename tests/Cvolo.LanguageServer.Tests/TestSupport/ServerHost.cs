@@ -68,7 +68,8 @@ internal sealed class ServerHost : IDisposable
         HeaderDelimitedMessageHandler handler = new ObservedHeaderDelimitedHandler(
             serverOutput, transport.ServerInput, formatter, rpcObservability,
             () => server.HasPendingRejectedInitializeResponse,
-            server.OnRejectedInitializeResponseFlushed);
+            server.OnRejectedInitializeResponseFlushed,
+            server.ObserveTransportDocumentNotification);
         IngressPipeline ingress = new();
         server.Ingress = ingress;
         JsonRpc rpc = new(handler);

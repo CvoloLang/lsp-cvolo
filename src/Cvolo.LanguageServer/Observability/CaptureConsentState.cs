@@ -33,6 +33,12 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     private int _journalChars;
     private int _journalEditCount;
     private bool _inputLedgerIncomplete;
+    // Transport witness is unscoped metadata only. A document URI or source
+    // string must NEVER be passed from the raw frame reader.
+    private long _transportDidOpen;
+    private long _transportDidChange;
+    private long _transportDidClose;
+    private bool _transportCountsOverflowed;
     private readonly List<CapturedDocumentHandlerEntry> _handlerEntries = [];
     private readonly List<CapturedDocumentInput> _inputLedger = [];
     private readonly List<CapturedDocumentSnapshot> _journal = [];
@@ -62,7 +68,9 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 SourceExportSupported: false,
                 CapturedInputOutcomes: _inputLedger.Count,
                 InputLedgerIncomplete: _inputLedgerIncomplete,
-                HandlerEntries: _handlerEntries.Count);
+                HandlerEntries: _handlerEntries.Count,
+                TransportDocumentNotifications: _transportDidOpen +
+                    _transportDidChange + _transportDidClose);
         }
     }
 
@@ -167,6 +175,10 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 _journal.Clear();
                 _inputLedger.Clear();
                 _handlerEntries.Clear();
+                _transportDidOpen = 0;
+                _transportDidChange = 0;
+                _transportDidClose = 0;
+                _transportCountsOverflowed = false;
                 _inputLedgerIncomplete = false;
                 _journalChars = 0;
                 _journalEditCount = 0;
@@ -271,6 +283,38 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     }
 
     /// <summary>
+    /// Observes only fixed document method names as frames cross the raw
+    /// HeaderDelimited transport reader. This is intentionally unscoped: no
+    /// source, URI, JSON parameters, request ids or file names are read.
+    /// It does not by itself prove that the downstream handler ran.
+    /// </summary>
+    internal void CaptureTransportNotification(string? method)
+    {
+        lock (_gate)
+        {
+            ExpireIfNeeded();
+            if (!_journalArmed || !_allowSources)
+                return;
+
+            switch (method)
+            {
+                case "textDocument/didOpen":
+                    if (_transportDidOpen == long.MaxValue) _transportCountsOverflowed = true;
+                    else _transportDidOpen++;
+                    break;
+                case "textDocument/didChange":
+                    if (_transportDidChange == long.MaxValue) _transportCountsOverflowed = true;
+                    else _transportDidChange++;
+                    break;
+                case "textDocument/didClose":
+                    if (_transportDidClose == long.MaxValue) _transportCountsOverflowed = true;
+                    else _transportDidClose++;
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
     /// Capture at document HANDLER entry, before ordered-queue attachment.
     /// Consent and the limited memory budget apply identically to settlements.
     /// A missing settlement can still be in flight: do not claim frame loss.
@@ -367,7 +411,9 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
             ExpireIfNeeded();
             return CaptureReplayVerifier.Inspect(
                 _journal, _journalIncomplete, _inputLedger, _inputLedgerIncomplete,
-                _handlerEntries);
+                _handlerEntries, new CaptureTransportWitness(
+                    _transportDidOpen, _transportDidChange, _transportDidClose,
+                    _transportCountsOverflowed));
         }
     }
 
@@ -407,6 +453,10 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         _journal.Clear();
         _inputLedger.Clear();
         _handlerEntries.Clear();
+        _transportDidOpen = 0;
+        _transportDidChange = 0;
+        _transportDidClose = 0;
+        _transportCountsOverflowed = false;
         _inputLedgerIncomplete = false;
         _journalChars = 0;
         _journalEditCount = 0;
@@ -458,7 +508,8 @@ internal sealed record CaptureConsentStatus(
     bool SourceExportSupported,
     int CapturedInputOutcomes = 0,
     bool InputLedgerIncomplete = false,
-    int HandlerEntries = 0);
+    int HandlerEntries = 0,
+    long TransportDocumentNotifications = 0);
 
 internal sealed record CaptureConsentAck(
     int ProtocolVersion,

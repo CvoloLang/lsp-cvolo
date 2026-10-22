@@ -66,7 +66,8 @@ internal static class ServerPipeline
         using ObservedHeaderDelimitedHandler handler = new(
             stdout, stdin, formatter, rpcObservability,
             () => server.HasPendingRejectedInitializeResponse,
-            server.OnRejectedInitializeResponseFlushed);
+            server.OnRejectedInitializeResponseFlushed,
+            server.ObserveTransportDocumentNotification);
         observability.Emit(new CompilerEvent
         {
             Event = "transport.ready",

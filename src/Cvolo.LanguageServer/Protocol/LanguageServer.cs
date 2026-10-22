@@ -53,6 +53,13 @@ internal sealed class LanguageServer(
     }
 
     private readonly SessionState _state = new();
+
+    /// <summary>
+    /// HeaderDelimited transport receipt. No file path, payload or source
+    /// crosses this API; only recognized fixed method names are counted.
+    /// </summary>
+    internal void ObserveTransportDocumentNotification(string method)
+        => RecordingControl.ObserveTransportDocumentNotification(method);
     private RecordingControlPlane? _recordingControl;
     private RecordingControlPlane RecordingControl => GetOrCreate(ref _recordingControl, () => new RecordingControlPlane(Observer, recordingSession));
     private readonly DiagnosticSink _diagnostics = new(logger);

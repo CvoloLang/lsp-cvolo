@@ -21,7 +21,8 @@ internal static class CaptureReplayVerifier
         IReadOnlyList<CapturedDocumentSnapshot> snapshots, bool journalIncomplete,
         IReadOnlyList<CapturedDocumentInput>? inputs = null,
         bool inputLedgerIncomplete = false,
-        IReadOnlyList<CapturedDocumentHandlerEntry>? entered = null)
+        IReadOnlyList<CapturedDocumentHandlerEntry>? entered = null,
+        CaptureTransportWitness? transportWitness = null)
     {
         var perDocument = new Dictionary<string, DocumentEvidenceBuilder>(StringComparer.Ordinal);
         var entries = new List<CaptureSnapshotEvidence>(snapshots.Count);
@@ -144,13 +145,19 @@ internal static class CaptureReplayVerifier
                 "document_uris_and_raw_source_omitted",
                 "input_receipts_do_not_prove_transport_capture_completeness",
                 "unsettled_handler_entries_are_not_proof_of_loss",
+                "transport_counters_are_unscoped_and_not_per_document_proof",
+                "transport_to_handler_mapping_not_yet_proven",
             ],
-            TraceCompleteness: problems || inputLedgerIncomplete ? "partial" : "unknown",
-            DocumentReplayCompleteness: problems || journalIncomplete || inputLedgerIncomplete ? "partial" : "unknown",
+            TraceCompleteness: problems || inputLedgerIncomplete ||
+                transportWitness?.CountersOverflowed == true ? "partial" : "unknown",
+            DocumentReplayCompleteness: problems || journalIncomplete ||
+                inputLedgerIncomplete || transportWitness?.CountersOverflowed == true
+                    ? "partial" : "unknown",
             ProjectInputsCompleteness: "unknown",
             SemanticReplayCompleteness: "unknown",
             InputReconciliation: reconciliation,
-            InputLedgerIncomplete: inputLedgerIncomplete);
+            InputLedgerIncomplete: inputLedgerIncomplete,
+            TransportWitness: transportWitness);
     }
 
     private sealed class DocumentEvidenceBuilder(string id)
@@ -191,4 +198,20 @@ internal sealed record CaptureReplayEvidence(
     string ProjectInputsCompleteness = "unknown",
     string SemanticReplayCompleteness = "unknown",
     CaptureInputReconciliation? InputReconciliation = null,
-    bool InputLedgerIncomplete = false);
+    bool InputLedgerIncomplete = false,
+    CaptureTransportWitness? TransportWitness = null);
+
+/// <summary>
+/// Privacy-safe, process-local count of document notification frames observed
+/// at the transport read boundary after journal arming. The counters include
+/// OTHER documents that did not receive consent, so neither the total nor a
+/// difference from scoped handler counts proves lost frames.
+/// </summary>
+internal sealed record CaptureTransportWitness(
+    long DidOpen, long DidChange, long DidClose, bool CountersOverflowed)
+{
+    public long ObservedNotifications => DidOpen + DidChange + DidClose;
+    public string Scope => "unscoped_transport";
+    public bool TransportToHandlerCorrelationProven => false;
+    public bool CompleteDocumentReplayProven => false;
+}

@@ -507,6 +507,33 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Transport_document_witness_is_exposed_by_real_rpc_without_source()
+    {
+        var (observer, _) = CreateObserver();
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync();
+        string serverId = observer.Identity.ServerInstanceId;
+        JObject granted = await session.Client.GrantCaptureConsentAsync(
+            serverId, ["file:///C:/project/main.cvl"], true, false, 60);
+        await session.Client.ArmCaptureJournalAsync(serverId, (string)granted["leaseId"]!);
+        // This unknown file is NOT scoped, but the raw transport can count
+        // the fixed method without reading or retaining its source or URI.
+        await session.Client.NotifyDidChangeAsync(
+            new Uri("file:///C:/project/not-consented.cvl"), 2,
+            new Microsoft.VisualStudio.LanguageServer.Protocol.TextDocumentContentChangeEvent
+            {
+                Text = "SECRET_UNSCOPED_PAYLOAD",
+            });
+        await session.Client.DrainNotificationsAsync();
+        JObject result = await session.Client.VerifyCaptureJournalAsync();
+        Assert.True((long?)result["transportWitness"]?["didChange"] >= 1);
+        Assert.Equal("unscoped_transport", (string?)result["transportWitness"]?["scope"]);
+        Assert.False((bool)result["transportWitness"]!["transportToHandlerCorrelationProven"]!);
+        Assert.DoesNotContain("SECRET_UNSCOPED_PAYLOAD", result.ToString());
+        Assert.DoesNotContain("not-consented.cvl", result.ToString());
+    }
+
+    [Fact]
     public async Task Noop_observer_cannot_report_a_successful_start()
     {
         using var session = ProtocolSession.Start();

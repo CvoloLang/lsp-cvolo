@@ -14,6 +14,7 @@ namespace Cvolo.LanguageServer.Observability;
 internal sealed class ObservedHeaderDelimitedHandler : HeaderDelimitedMessageHandler
 {
 	private readonly RpcObservability? _observability;
+	private readonly Action<string>? _onDocumentNotificationRead;
 	private readonly Func<bool>? _isRejectedInitializePending;
 	private readonly Action? _rejectedInitializeFlushed;
 	private bool _notifyAfterFlush;
@@ -24,10 +25,12 @@ internal sealed class ObservedHeaderDelimitedHandler : HeaderDelimitedMessageHan
 		IJsonRpcMessageFormatter formatter,
 		RpcObservability? observability,
 		Func<bool>? isRejectedInitializePending = null,
-		Action? rejectedInitializeFlushed = null)
+		Action? rejectedInitializeFlushed = null,
+		Action<string>? onDocumentNotificationRead = null)
 		: base(writeStream, readStream, formatter)
 	{
 		_observability = observability;
+		_onDocumentNotificationRead = onDocumentNotificationRead;
 		_isRejectedInitializePending = isRejectedInitializePending;
 		_rejectedInitializeFlushed = rejectedInitializeFlushed;
 	}
@@ -36,12 +39,23 @@ internal sealed class ObservedHeaderDelimitedHandler : HeaderDelimitedMessageHan
 	{
 		var message = await base.ReadCoreAsync(cancellationToken).ConfigureAwait(false);
 
-		if (_observability is not null && message is JsonRpcRequest request)
+		if (message is JsonRpcRequest request)
 		{
 			if (request.RequestId.IsEmpty)
-				_observability.OnNotificationReceived(request.Method);
+			{
+				// Actual raw read boundary, before JSON-RPC handler dispatch.
+				// Only machine method names cross the capture boundary; faults
+				// in optional observability must never consume the RPC frame.
+				if (request.Method is "textDocument/didOpen" or
+					"textDocument/didChange" or "textDocument/didClose")
+				{
+					try { _onDocumentNotificationRead?.Invoke(request.Method); }
+					catch (Exception) { }
+				}
+				_observability?.OnNotificationReceived(request.Method);
+			}
 			else
-				_observability.OnRequestReceived(request);
+				_observability?.OnRequestReceived(request);
 		}
 
 		return message;

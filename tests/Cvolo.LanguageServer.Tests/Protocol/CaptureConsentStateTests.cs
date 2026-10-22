@@ -484,6 +484,41 @@ public sealed class CaptureConsentStateTests
         Assert.Equal(0, state.InspectReplay().InputReconciliation!.ObservedInputs);
     }
 
+    [Fact]
+    public void Raw_transport_counters_are_unscoped_consent_gated_and_revoked()
+    {
+        var state = ArmedJournal();
+        state.CaptureTransportNotification("textDocument/didOpen");
+        state.CaptureTransportNotification("textDocument/didChange");
+        state.CaptureTransportNotification("textDocument/didClose");
+        state.CaptureTransportNotification("textDocument/completion");
+        var report = state.InspectReplay();
+        Assert.Equal(3, report.TransportWitness!.ObservedNotifications);
+        Assert.Equal(1, report.TransportWitness.DidOpen);
+        Assert.Equal(1, report.TransportWitness.DidChange);
+        Assert.Equal(1, report.TransportWitness.DidClose);
+        Assert.Equal("unscoped_transport", report.TransportWitness.Scope);
+        Assert.False(report.TransportWitness.TransportToHandlerCorrelationProven);
+        Assert.False(report.TransportWitness.CompleteDocumentReplayProven);
+        Assert.Equal("unknown", report.TraceCompleteness);
+        Assert.False(report.ReplayComplete);
+        state.Revoke(new CaptureConsentRevoke
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+        }, ServerId);
+        state.CaptureTransportNotification("textDocument/didChange");
+        Assert.Equal(0, state.InspectReplay().TransportWitness!.ObservedNotifications);
+        Assert.Equal(0, state.Status().TransportDocumentNotifications);
+    }
+
+    [Fact]
+    public void Transport_messages_before_arm_are_never_counted()
+    {
+        var state = new CaptureConsentState();
+        state.CaptureTransportNotification("textDocument/didOpen");
+        Assert.Equal(0, state.InspectReplay().TransportWitness!.ObservedNotifications);
+    }
+
     private static CaptureConsentState ArmedJournal()
     {
         var state = new CaptureConsentState();
