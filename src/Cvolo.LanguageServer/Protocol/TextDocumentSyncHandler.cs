@@ -34,7 +34,8 @@ internal sealed class TextDocumentSyncHandler(
     ICompilerObserver? observer = null,
     Action<Uri, int, string, bool, IReadOnlyList<DocumentChange>?, long?>? onAppliedDocument = null,
     Action<Uri, long?>? onClosedDocument = null,
-    Action<Uri?, string, string, int?, long?>? onSettledDocument = null) : IDisposable
+    Action<Uri?, string, string, int?, long?>? onSettledDocument = null,
+    Action<Uri?, string, int?, long?>? onEnteredDocument = null) : IDisposable
 {
     private const string CvoloLanguageId = "cvolo";
 
@@ -116,6 +117,15 @@ internal sealed class TextDocumentSyncHandler(
     private void DispatchInput(IngressSequence sequence, Uri? uri, string kind,
         int? version, Func<InputDisposition> apply)
     {
+        // Handler admission is observable before attaching the ordered writer.
+        // IngressScope is captured at handler entry; never read it later.
+        try
+        {
+            onEnteredDocument?.Invoke(uri, kind, version,
+                sequence.IsNone ? null : sequence.Value);
+        }
+        catch (Exception) { }
+
         InputDisposition ApplyAndObserve()
         {
             string outcome = "faulted";

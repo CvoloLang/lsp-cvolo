@@ -287,6 +287,10 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
         Uri? uri, string kind, string outcome, int? version, long? ingressSequence)
         => _captureConsent.CaptureSettled(uri, kind, outcome, version, ingressSequence);
 
+    internal void CaptureEnteredDocumentHandler(
+        Uri? uri, string kind, int? version, long? ingressSequence)
+        => _captureConsent.CaptureHandlerEntered(uri, kind, version, ingressSequence);
+
     internal CaptureReplayEvidence VerifyCaptureJournal()
         => _captureConsent.InspectReplay();
 

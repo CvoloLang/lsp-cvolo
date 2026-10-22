@@ -105,6 +105,51 @@ public sealed class CaptureInputReconcilerTests
     }
 
     [Fact]
+    public void Handler_entry_without_settlement_is_in_flight_not_proven_loss()
+    {
+        var evidence = CaptureInputReconciler.Reconcile(
+            [new(Document, "did_open", "applied", 1, 3)],
+            [Open(Document, 1, 3)],
+            [
+                new(Document, "did_open", 1, 3),
+                new(Document, "did_change", 2, 7),
+            ]);
+        Assert.Null(evidence.FirstIssue);
+        Assert.Equal(2, evidence.HandlerEntries);
+        Assert.Equal(1, evidence.UnsettledHandlerEntries);
+        Assert.Equal(1, evidence.MatchedSnapshots);
+    }
+
+    [Fact]
+    public void Out_of_order_handler_dispatch_is_safe_to_reconcile()
+    {
+        var evidence = CaptureInputReconciler.Reconcile(
+            [
+                new(Document, "did_open", "applied", 1, 2),
+                new(Document, "did_change", "applied", 2, 7),
+            ],
+            [Open(Document, 1, 2), Change(Document, 2, 7)],
+            [
+                new(Document, "did_change", 2, 7),
+                new(Document, "did_open", 1, 2),
+            ]);
+        Assert.Null(evidence.FirstIssue);
+        Assert.Equal(0, evidence.UnsettledHandlerEntries);
+    }
+
+    [Fact]
+    public void Unknown_handler_ingress_is_not_fabricated()
+    {
+        var evidence = CaptureInputReconciler.Reconcile(
+            Array.Empty<CapturedDocumentInput>(),
+            Array.Empty<CapturedDocumentSnapshot>(),
+            [new(Document, "did_change", 2, null)]);
+        Assert.Equal(1, evidence.HandlerEntriesWithoutIngress);
+        Assert.Equal(0, evidence.UnsettledHandlerEntries);
+        Assert.Null(evidence.FirstIssue);
+    }
+
+    [Fact]
     public void Concurrent_documents_do_not_share_snapshots_by_ingress()
     {
         var result = CaptureInputReconciler.Reconcile(

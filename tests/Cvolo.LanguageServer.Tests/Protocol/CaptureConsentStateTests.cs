@@ -411,6 +411,43 @@ public sealed class CaptureConsentStateTests
     }
 
     [Fact]
+    public void Handler_entries_are_bounded_and_revoke_clears_them()
+    {
+        var state = ArmedJournal();
+        state.CaptureHandlerEntered(new Uri("file:///C:/project/unrelated.cvl"),
+            "did_open", 1, 1);
+        Assert.Equal(0, state.Status().HandlerEntries);
+        for (int i = 0; i <= CaptureConsentState.MaxInputReceipts; i++)
+            state.CaptureHandlerEntered(new Uri(Document), "did_change", i, i + 2);
+        Assert.Equal(CaptureConsentState.MaxInputReceipts, state.Status().HandlerEntries);
+        Assert.True(state.Status().InputLedgerIncomplete);
+        Assert.Equal("partial", state.InspectReplay().TraceCompleteness);
+        state.Revoke(new CaptureConsentRevoke
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+        }, ServerId);
+        Assert.Equal(0, state.Status().HandlerEntries);
+    }
+
+    [Fact]
+    public void Handler_entry_can_be_inspected_before_settlement()
+    {
+        var state = ArmedJournal();
+        state.CaptureHandlerEntered(new Uri(Document), "did_open", 1, 77);
+        var e = state.InspectReplay();
+        Assert.Equal(1, e.InputReconciliation!.UnsettledHandlerEntries);
+        Assert.Null(e.FirstObservedIssue);
+        Assert.False(e.ReplayComplete);
+        state.CaptureCommitted(new Uri(Document), 1, "secret", isDidOpen: true,
+            ingressSequence: 77);
+        state.CaptureSettled(new Uri(Document), "did_open", "applied", 1, 77);
+        var after = state.InspectReplay();
+        Assert.Equal(0, after.InputReconciliation!.UnsettledHandlerEntries);
+        Assert.Equal(1, after.InputReconciliation.MatchedSnapshots);
+        Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(after));
+    }
+
+    [Fact]
     public void Out_of_scope_input_receipts_are_never_retained()
     {
         var state = ArmedJournal();

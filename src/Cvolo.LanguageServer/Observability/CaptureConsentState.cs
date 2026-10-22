@@ -33,6 +33,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     private int _journalChars;
     private int _journalEditCount;
     private bool _inputLedgerIncomplete;
+    private readonly List<CapturedDocumentHandlerEntry> _handlerEntries = [];
     private readonly List<CapturedDocumentInput> _inputLedger = [];
     private readonly List<CapturedDocumentSnapshot> _journal = [];
 
@@ -60,7 +61,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 InMemoryJournalSupported: true,
                 SourceExportSupported: false,
                 CapturedInputOutcomes: _inputLedger.Count,
-                InputLedgerIncomplete: _inputLedgerIncomplete);
+                InputLedgerIncomplete: _inputLedgerIncomplete,
+                HandlerEntries: _handlerEntries.Count);
         }
     }
 
@@ -164,6 +166,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
             {
                 _journal.Clear();
                 _inputLedger.Clear();
+                _handlerEntries.Clear();
                 _inputLedgerIncomplete = false;
                 _journalChars = 0;
                 _journalEditCount = 0;
@@ -268,6 +271,34 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     }
 
     /// <summary>
+    /// Capture at document HANDLER entry, before ordered-queue attachment.
+    /// Consent and the limited memory budget apply identically to settlements.
+    /// A missing settlement can still be in flight: do not claim frame loss.
+    /// </summary>
+    internal void CaptureHandlerEntered(
+        Uri? uri, string kind, int? version, long? ingressSequence)
+    {
+        if (uri is null) return;
+        lock (_gate)
+        {
+            ExpireIfNeeded();
+            if (!_journalArmed || !_allowSources || _documents is null
+                || !uri.IsAbsoluteUri || !uri.IsFile
+                || !_documents.Contains(uri.AbsoluteUri))
+                return;
+            if (_handlerEntries.Count >= MaxInputReceipts)
+            {
+                _inputLedgerIncomplete = true;
+                _journalIncomplete = true;
+                return;
+            }
+            _handlerEntries.Add(new CapturedDocumentHandlerEntry(
+                uri.AbsoluteUri, kind, version,
+                ingressSequence is > 0 ? ingressSequence : null));
+        }
+    }
+
+    /// <summary>
     /// Retains only bounded machine outcomes of scoped, server-settled
     /// notifications. Rejected changes never require storing their payload.
     /// Called after application, and never from under DocumentStore locks.
@@ -335,7 +366,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         {
             ExpireIfNeeded();
             return CaptureReplayVerifier.Inspect(
-                _journal, _journalIncomplete, _inputLedger, _inputLedgerIncomplete);
+                _journal, _journalIncomplete, _inputLedger, _inputLedgerIncomplete,
+                _handlerEntries);
         }
     }
 
@@ -374,6 +406,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     {
         _journal.Clear();
         _inputLedger.Clear();
+        _handlerEntries.Clear();
         _inputLedgerIncomplete = false;
         _journalChars = 0;
         _journalEditCount = 0;
@@ -424,7 +457,8 @@ internal sealed record CaptureConsentStatus(
     bool InMemoryJournalSupported,
     bool SourceExportSupported,
     int CapturedInputOutcomes = 0,
-    bool InputLedgerIncomplete = false);
+    bool InputLedgerIncomplete = false,
+    int HandlerEntries = 0);
 
 internal sealed record CaptureConsentAck(
     int ProtocolVersion,

@@ -20,7 +20,8 @@ internal static class CaptureReplayVerifier
     internal static CaptureReplayEvidence Inspect(
         IReadOnlyList<CapturedDocumentSnapshot> snapshots, bool journalIncomplete,
         IReadOnlyList<CapturedDocumentInput>? inputs = null,
-        bool inputLedgerIncomplete = false)
+        bool inputLedgerIncomplete = false,
+        IReadOnlyList<CapturedDocumentHandlerEntry>? entered = null)
     {
         var perDocument = new Dictionary<string, DocumentEvidenceBuilder>(StringComparer.Ordinal);
         var entries = new List<CaptureSnapshotEvidence>(snapshots.Count);
@@ -117,7 +118,7 @@ internal static class CaptureReplayVerifier
             d.Id, d.Count, d.Segments, d.HasObservedBaseline,
             d.LastVersion, d.AnyIssue, d.VerifiedEdits)).ToArray();
         CaptureInputReconciliation reconciliation = CaptureInputReconciler.Reconcile(
-            inputs ?? Array.Empty<CapturedDocumentInput>(), snapshots);
+            inputs ?? Array.Empty<CapturedDocumentInput>(), snapshots, entered);
         bool problems = firstIssue is not null || reconciliation.FirstIssue is not null;
         return new CaptureReplayEvidence(
             ProtocolVersion: 1,
@@ -137,6 +138,7 @@ internal static class CaptureReplayVerifier
                 "snapshot_hashes_do_not_prove_original_editor_inputs",
                 "document_uris_and_raw_source_omitted",
                 "input_receipts_do_not_prove_transport_capture_completeness",
+                "unsettled_handler_entries_are_not_proof_of_loss",
             ],
             TraceCompleteness: problems || inputLedgerIncomplete ? "partial" : "unknown",
             DocumentReplayCompleteness: problems || journalIncomplete || inputLedgerIncomplete ? "partial" : "unknown",

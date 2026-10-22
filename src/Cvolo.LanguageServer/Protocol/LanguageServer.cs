@@ -179,7 +179,9 @@ internal sealed class LanguageServer(
                 RecordingControl.CaptureCommittedDocument(uri, version, text, isDidOpen, changes, ingress),
             (uri, ingress) => RecordingControl.CaptureClosedDocument(uri, ingress),
             (uri, kind, outcome, version, ingress) =>
-                RecordingControl.CaptureSettledDocumentInput(uri, kind, outcome, version, ingress)));
+                RecordingControl.CaptureSettledDocumentInput(uri, kind, outcome, version, ingress),
+            (uri, kind, version, ingress) =>
+                RecordingControl.CaptureEnteredDocumentHandler(uri, kind, version, ingress)));
 
     /// <summary>
     /// Session-scoped, bounded store of completion-resolve entries guarding opaque data tokens.
