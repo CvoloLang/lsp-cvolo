@@ -332,8 +332,7 @@ public sealed class CaptureConsentStateTests
         var evidence = state.InspectReplay();
         Assert.Equal("non_increasing_document_ingress", evidence.FirstObservedIssue);
         Assert.False(evidence.ReplayComplete);
-        Assert.Equal("did_open_not_observed", evidence.Snapshots[2].Issue is
-            "non_increasing_document_ingress" ? "did_open_not_observed" : evidence.Snapshots[2].Issue);
+        Assert.Equal("non_increasing_document_ingress", evidence.Snapshots[2].Issue);
     }
 
     private static CaptureConsentState ArmedJournal()
