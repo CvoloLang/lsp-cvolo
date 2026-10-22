@@ -32,7 +32,8 @@ internal sealed class TextDocumentSyncHandler(
     Action? onProjectChanged = null,
     Func<OrderedInputQueue?>? inputQueueAccessor = null,
     ICompilerObserver? observer = null,
-    Action<Uri, int, string, bool, IReadOnlyList<DocumentChange>?>? onAppliedDocument = null) : IDisposable
+    Action<Uri, int, string, bool, IReadOnlyList<DocumentChange>?, long?>? onAppliedDocument = null,
+    Action<Uri, long?>? onClosedDocument = null) : IDisposable
 {
     private const string CvoloLanguageId = "cvolo";
 
@@ -84,15 +85,15 @@ internal sealed class TextDocumentSyncHandler(
 
     [JsonRpcMethod(Methods.TextDocumentDidOpenName, UseSingleObjectParameterDeserialization = true)]
     public void DidOpen(DidOpenTextDocumentParams? parameters)
-        => DispatchInput(IngressScope.Current, () => ApplyDidOpen(parameters));
+        { IngressSequence ingress = IngressScope.Current; DispatchInput(ingress, () => ApplyDidOpen(parameters, ingress)); }
 
     [JsonRpcMethod(Methods.TextDocumentDidChangeName, UseSingleObjectParameterDeserialization = true)]
     public void DidChange(DidChangeTextDocumentParams? parameters)
-        => DispatchInput(IngressScope.Current, () => ApplyDidChange(parameters));
+        { IngressSequence ingress = IngressScope.Current; DispatchInput(ingress, () => ApplyDidChange(parameters, ingress)); }
 
     [JsonRpcMethod(Methods.TextDocumentDidCloseName, UseSingleObjectParameterDeserialization = true)]
     public void DidClose(DidCloseTextDocumentParams? parameters)
-        => DispatchInput(IngressScope.Current, () => ApplyDidClose(parameters));
+        { IngressSequence ingress = IngressScope.Current; DispatchInput(ingress, () => ApplyDidClose(parameters, ingress)); }
 
     /// <summary>
     /// Applies an input through the ordered writer when an ingress queue is present;
@@ -111,7 +112,7 @@ internal sealed class TextDocumentSyncHandler(
         queue.Attach(sequence, apply);
     }
 
-    private InputDisposition ApplyDidOpen(DidOpenTextDocumentParams? parameters)
+    private InputDisposition ApplyDidOpen(DidOpenTextDocumentParams? parameters, IngressSequence ingress)
     {
         var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } item)
@@ -145,7 +146,7 @@ internal sealed class TextDocumentSyncHandler(
         }
         // The journal is optional; even a faulty diagnostic sink must never
         // change document semantics or block a successful editor update.
-        try { onAppliedDocument?.Invoke(item.Uri, opened.Version.Value, opened.Text, true, null); }
+        try { onAppliedDocument?.Invoke(item.Uri, opened.Version.Value, opened.Text, true, null, ingress.IsNone ? null : ingress.Value); }
         catch (Exception) { }
         LogTiming("didOpen/store", stopwatch, documentUri, 100);
 
@@ -163,7 +164,7 @@ internal sealed class TextDocumentSyncHandler(
         return Applied(DidOpenEvent, null, item.Version);
     }
 
-    private InputDisposition ApplyDidChange(DidChangeTextDocumentParams? parameters)
+    private InputDisposition ApplyDidChange(DidChangeTextDocumentParams? parameters, IngressSequence ingress)
     {
         var stopwatch = Stopwatch.StartNew();
         EmitDocumentEvent(DidChangeReceivedEvent, "received", null, parameters?.TextDocument?.Version);
@@ -198,7 +199,7 @@ internal sealed class TextDocumentSyncHandler(
             logger.Debug($"[diag] didChange for '{documentUri}' v{textDocument.Version} was not applied; diagnostics not scheduled.");
             return Rejected(DidChangeRejectedEvent, "store_not_applied", textDocument.Version);
         }
-        try { onAppliedDocument?.Invoke(textDocument.Uri, changed.Version.Value, changed.Text, false, changes); }
+        try { onAppliedDocument?.Invoke(textDocument.Uri, changed.Version.Value, changed.Text, false, changes, ingress.IsNone ? null : ingress.Value); }
         catch (Exception) { }
         LogTiming("didChange/store", stopwatch, documentUri);
 
@@ -216,7 +217,7 @@ internal sealed class TextDocumentSyncHandler(
         return Applied(DidChangeAppliedEvent, null, textDocument.Version);
     }
 
-    private InputDisposition ApplyDidClose(DidCloseTextDocumentParams? parameters)
+    private InputDisposition ApplyDidClose(DidCloseTextDocumentParams? parameters, IngressSequence ingress)
     {
         var stopwatch = Stopwatch.StartNew();
         if (parameters?.TextDocument is not { } textDocument)
@@ -242,6 +243,8 @@ internal sealed class TextDocumentSyncHandler(
             logger.Debug($"[diag] didClose for '{documentUri}' ignored; document was not open.");
             return Rejected(DidCloseEvent, "not_open");
         }
+        try { onClosedDocument?.Invoke(textDocument.Uri, ingress.IsNone ? null : ingress.Value); }
+        catch (Exception) { }
         LogTiming("didClose/store", stopwatch, documentUri, 100);
 
         logger.Info($"[diag] didClose '{documentUri}'; cleared published diagnostics.");
