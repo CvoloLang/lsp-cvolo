@@ -1,4 +1,5 @@
 using Cvolo.LanguageServer.Observability;
+using Cvolo.LanguageServer.Core.Documents;
 using Xunit;
 
 namespace Cvolo.LanguageServer.Tests.Protocol;
@@ -170,7 +171,9 @@ public sealed class CaptureConsentStateTests
         }, ServerId);
 
         state.CaptureCommitted(new Uri(Document), 1, "x😀", isDidOpen: true);
-        state.CaptureCommitted(new Uri(Document), 3, "x😀!", isDidOpen: false);
+        state.CaptureCommitted(new Uri(Document), 3, "x😀!", isDidOpen: false,
+            appliedChanges: [new DocumentChange(
+                new TextRange(new TextPosition(0, 3), new TextPosition(0, 3)), "!")]);
 
         var result = state.InspectReplay();
         Assert.Equal("retained_snapshots_inspected", result.Status);
@@ -212,6 +215,86 @@ public sealed class CaptureConsentStateTests
             ProtocolVersion = 1, ServerInstanceId = ServerId,
         }, ServerId);
         Assert.Empty(state.InspectReplay().Snapshots);
+    }
+
+    [Fact]
+    public void Accepted_utf16_edit_batches_replay_across_surrogate_pairs_and_crlf()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "a\r\n😀", isDidOpen: true);
+        state.CaptureCommitted(new Uri(Document), 2, "a\r\n😀!", appliedChanges:
+        [
+            new DocumentChange(
+                new TextRange(new TextPosition(1, 2), new TextPosition(1, 2)), "!"),
+        ]);
+        state.CaptureCommitted(new Uri(Document), 3, "replaced\r\n💡", appliedChanges:
+        [
+            new DocumentChange(null, "replaced\r\n💡"),
+        ]);
+        var evidence = state.InspectReplay();
+        Assert.Null(evidence.FirstObservedIssue);
+        Assert.Equal(2, Assert.Single(evidence.Documents).VerifiedEditBatches);
+        Assert.Equal(1, evidence.Snapshots[1].CapturedEdits);
+        Assert.False(evidence.ReplayComplete);
+    }
+
+    [Fact]
+    public void Mismatched_edit_replay_reports_first_failing_version()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "abc", isDidOpen: true);
+        state.CaptureCommitted(new Uri(Document), 2, "WRONG", appliedChanges:
+        [
+            new DocumentChange(
+                new TextRange(new TextPosition(0, 1), new TextPosition(0, 2)), "X"),
+        ]);
+        var evidence = state.InspectReplay();
+        Assert.Equal("replayed_text_mismatch", evidence.FirstObservedIssue);
+        Assert.Equal("replayed_text_mismatch", evidence.Snapshots[1].Issue);
+        Assert.Equal("retained_snapshot_issues", evidence.Status);
+        Assert.False(evidence.ReplayComplete);
+    }
+
+    [Fact]
+    public void Reopening_document_starts_new_replay_segment_with_reset_version()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 10, "old", isDidOpen: true);
+        state.CaptureCommitted(new Uri(Document), 1, "new", isDidOpen: true);
+        var evidence = state.InspectReplay();
+        Assert.Equal(2, Assert.Single(evidence.Documents).ObservedDidOpens);
+        Assert.Null(evidence.FirstObservedIssue);
+        Assert.Equal(2, evidence.CapturedSnapshots);
+    }
+
+    [Fact]
+    public void Missing_edit_batch_is_reported_and_no_raw_edit_escapes_in_evidence()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "secret-baseline", isDidOpen: true);
+        state.CaptureCommitted(new Uri(Document), 2, "secret-updated");
+        var evidence = state.InspectReplay();
+        Assert.Equal("edit_batch_not_retained", evidence.FirstObservedIssue);
+        Assert.Null(evidence.Snapshots[1].CapturedEdits);
+        Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(evidence));
+    }
+
+    private static CaptureConsentState ArmedJournal()
+    {
+        var state = new CaptureConsentState();
+        var granted = state.Grant(new CaptureConsentGrant
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            UserConfirmed = true, CaptureSources = true,
+            TtlSeconds = 60, DocumentUris = [Document],
+        }, ServerId);
+        Assert.Equal("registered_not_capturing", granted.Status);
+        Assert.Equal("armed_in_memory", state.Arm(new CaptureJournalArm
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            LeaseId = granted.LeaseId,
+        }, ServerId).Status);
+        return state;
     }
 
     [Fact]

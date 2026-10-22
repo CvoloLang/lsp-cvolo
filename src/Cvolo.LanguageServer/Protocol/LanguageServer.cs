@@ -175,8 +175,8 @@ internal sealed class LanguageServer(
             null,
             () => Ingress?.Inputs,
             Observer,
-            (uri, version, text, isDidOpen) =>
-                RecordingControl.CaptureCommittedDocument(uri, version, text, isDidOpen)));
+            (uri, version, text, isDidOpen, changes) =>
+                RecordingControl.CaptureCommittedDocument(uri, version, text, isDidOpen, changes)));
 
     /// <summary>
     /// Session-scoped, bounded store of completion-resolve entries guarding opaque data tokens.

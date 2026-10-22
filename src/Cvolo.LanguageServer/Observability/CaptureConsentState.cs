@@ -1,3 +1,5 @@
+using Cvolo.LanguageServer.Core.Documents;
+
 namespace Cvolo.LanguageServer.Observability;
 
 /// <summary>
@@ -15,6 +17,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     internal const int MaxJournalSnapshots = 64;
     internal const int MaxSnapshotChars = 256 * 1024;
     internal const int MaxJournalChars = 1024 * 1024;
+    internal const int MaxBatchEdits = 64;
+    internal const int MaxJournalEdits = 256;
     private readonly Func<DateTimeOffset> _utcNow = clock ?? (() => DateTimeOffset.UtcNow);
     private readonly object _gate = new();
     private HashSet<string>? _documents;
@@ -26,6 +30,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     private bool _journalArmed;
     private bool _journalIncomplete;
     private int _journalChars;
+    private int _journalEditCount;
     private readonly List<CapturedDocumentSnapshot> _journal = [];
 
     internal CaptureConsentStatus Status()
@@ -154,6 +159,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
             {
                 _journal.Clear();
                 _journalChars = 0;
+                _journalEditCount = 0;
                 // We cannot reconstruct pre-arm document changes. The future
                 // replay verifier must see this unknown prefix explicitly.
                 _journalIncomplete = true;
@@ -169,7 +175,9 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     /// Consent, scope, TTL and byte limits are all checked atomically against
     /// revoke before retaining even a reference to the source string.
     /// </summary>
-    internal void CaptureCommitted(Uri? uri, int version, string? sourceText, bool isDidOpen = false)
+    internal void CaptureCommitted(
+        Uri? uri, int version, string? sourceText,
+        bool isDidOpen = false, IReadOnlyList<DocumentChange>? appliedChanges = null)
     {
         if (uri is null || sourceText is null)
             return;
@@ -201,16 +209,51 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                     break;
                 }
             }
-            if (previous is not null && version <= previous.Version)
+            // Reopening a document starts a new lifetime; its version can
+            // legitimately restart at 1 after the preceding didClose.
+            if (!isDidOpen && previous is not null && version <= previous.Version)
             {
                 if (version < previous.Version)
                     _journalIncomplete = true;
                 return;
             }
 
+            DocumentChange[]? capturedChanges = null;
+            int editCharacters = 0;
+            if (!isDidOpen && appliedChanges is not null)
+            {
+                if (appliedChanges.Count > MaxBatchEdits
+                    || appliedChanges.Count > MaxJournalEdits - _journalEditCount)
+                {
+                    _journalIncomplete = true;
+                }
+                else
+                {
+                    long count = 0;
+                    foreach (var change in appliedChanges)
+                        count += change.Text.Length;
+
+                    if (count > MaxJournalChars - _journalChars - sourceText.Length)
+                        _journalIncomplete = true;
+                    else
+                    {
+                        capturedChanges = appliedChanges.ToArray();
+                        editCharacters = (int)count;
+                        _journalEditCount += capturedChanges.Length;
+                    }
+                }
+            }
+            else if (!isDidOpen)
+            {
+                // A full-text snapshot is useful evidence but it cannot prove
+                // replay if the applied UTF-16 edit batch wasn't retained.
+                _journalIncomplete = true;
+            }
+
             _journal.Add(new(uri.AbsoluteUri, version, sourceText,
-                CaptureReplayVerifier.ComputeDigest(sourceText), isDidOpen));
-            _journalChars += sourceText.Length;
+                CaptureReplayVerifier.ComputeDigest(sourceText), isDidOpen,
+                capturedChanges));
+            _journalChars += sourceText.Length + editCharacters;
         }
     }
 
@@ -259,6 +302,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     {
         _journal.Clear();
         _journalChars = 0;
+        _journalEditCount = 0;
         _journalArmed = false;
         _journalIncomplete = false;
         _documents?.Clear();
@@ -335,4 +379,5 @@ internal sealed record CaptureJournalAck(
 /// <summary>Private in-memory source; never serialized by the RPC layer.</summary>
 internal sealed record CapturedDocumentSnapshot(
     string DocumentUri, int Version, string Text,
-    string Sha256Utf16Le, bool IsDidOpen);
+    string Sha256Utf16Le, bool IsDidOpen,
+    IReadOnlyList<DocumentChange>? AppliedChanges = null);

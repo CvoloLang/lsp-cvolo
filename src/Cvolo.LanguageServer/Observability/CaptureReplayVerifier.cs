@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Cvolo.LanguageServer.Core.Editing;
 
 namespace Cvolo.LanguageServer.Observability;
 
@@ -54,10 +55,30 @@ internal static class CaptureReplayVerifier
             if (!snapshot.IsDidOpen
                 && doc.LastVersion is { } previous
                 && snapshot.Version <= previous)
-            {
                 issue ??= "non_increasing_document_version";
+
+            if (!snapshot.IsDidOpen)
+            {
+                if (snapshot.AppliedChanges is null)
+                    issue ??= "edit_batch_not_retained";
+                else if (doc.LastText is not null)
+                {
+                    // Replay the ORIGINAL accepted LSP UTF-16 edits against
+                    // our own last retained input, not against DocumentStore.
+                    // This verifies a second implementation path and ensures
+                    // CRLF, surrogate pairs and multi-edit batches agree.
+                    if (!IncrementalTextEditor.TryApplyChanges(
+                        doc.LastText, snapshot.AppliedChanges, out string reproduced))
+                        issue ??= "replay_invalid_utf16_range";
+                    else if (!string.Equals(reproduced, snapshot.Text,
+                        StringComparison.Ordinal))
+                        issue ??= "replayed_text_mismatch";
+                    else if (issue is null)
+                        doc.VerifiedEdits++;
+                }
             }
 
+            doc.LastText = snapshot.Text;
             doc.LastVersion = snapshot.Version;
             doc.Count++;
             doc.AnyIssue |= issue is not null;
@@ -65,12 +86,13 @@ internal static class CaptureReplayVerifier
             entries.Add(new CaptureSnapshotEvidence(
                 doc.Id, snapshot.Version,
                 snapshot.IsDidOpen ? "did_open" : "did_change",
-                snapshot.Text.Length, snapshot.Sha256Utf16Le, issue));
+                snapshot.Text.Length, snapshot.Sha256Utf16Le, issue,
+                snapshot.AppliedChanges?.Count));
         }
 
         var documents = perDocument.Values.Select(d => new CaptureDocumentEvidence(
             d.Id, d.Count, d.Segments, d.HasObservedBaseline,
-            d.LastVersion, d.AnyIssue)).ToArray();
+            d.LastVersion, d.AnyIssue, d.VerifiedEdits)).ToArray();
         bool problems = firstIssue is not null;
         return new CaptureReplayEvidence(
             ProtocolVersion: 1,
@@ -84,7 +106,7 @@ internal static class CaptureReplayVerifier
             Snapshots: entries.ToArray(),
             Limitations:
             [
-                "utf16_edit_batches_not_recorded",
+                "some_utf16_edit_batches_may_not_be_retained",
                 "notification_stream_completeness_not_proven",
                 "snapshot_hashes_do_not_prove_original_editor_inputs",
                 "document_uris_and_raw_source_omitted",
@@ -97,6 +119,8 @@ internal static class CaptureReplayVerifier
         internal int Count;
         internal int Segments;
         internal int? LastVersion;
+        internal string? LastText;
+        internal int VerifiedEdits;
         internal bool HasObservedBaseline;
         internal bool AnyIssue;
     }
@@ -104,11 +128,13 @@ internal static class CaptureReplayVerifier
 
 internal sealed record CaptureSnapshotEvidence(
     string DocumentId, int Version, string InputKind,
-    int Utf16CodeUnits, string Sha256Utf16Le, string? Issue);
+    int Utf16CodeUnits, string Sha256Utf16Le, string? Issue,
+    int? CapturedEdits);
 
 internal sealed record CaptureDocumentEvidence(
     string DocumentId, int CapturedSnapshots, int ObservedDidOpens,
-    bool HasObservedBaseline, int? LastVersion, bool HasIssue);
+    bool HasObservedBaseline, int? LastVersion, bool HasIssue,
+    int VerifiedEditBatches);
 
 internal sealed record CaptureReplayEvidence(
     int ProtocolVersion, string Status, bool ReplayComplete,
