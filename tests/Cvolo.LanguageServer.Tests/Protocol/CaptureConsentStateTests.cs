@@ -279,6 +279,63 @@ public sealed class CaptureConsentStateTests
         Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(evidence));
     }
 
+    [Fact]
+    public void Interleaved_rpc_ingress_does_not_imply_missing_document_edit()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "A", isDidOpen: true,
+            ingressSequence: 10);
+        state.CaptureCommitted(new Uri(Document), 2, "AB", appliedChanges:
+        [
+            new DocumentChange(new TextRange(new TextPosition(0, 1),
+                new TextPosition(0, 1)), "B"),
+        ], ingressSequence: 15);
+        var evidence = state.InspectReplay();
+        Assert.Null(evidence.FirstObservedIssue);
+        Assert.Equal(10L, evidence.Snapshots[0].IngressSequence);
+        Assert.Equal(15L, evidence.Snapshots[1].IngressSequence);
+        Assert.Equal(1, Assert.Single(evidence.Documents).VerifiedEditBatches);
+        Assert.False(evidence.ReplayComplete);
+    }
+
+    [Fact]
+    public void Close_and_reopen_create_distinct_verification_segments()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 20, "old", isDidOpen: true,
+            ingressSequence: 4);
+        state.CaptureClosed(new Uri(Document), ingressSequence: 5);
+        state.CaptureCommitted(new Uri(Document), 1, "new", isDidOpen: true,
+            ingressSequence: 9);
+        var evidence = state.InspectReplay();
+        Assert.Null(evidence.FirstObservedIssue);
+        Assert.Equal("did_close", evidence.Snapshots[1].InputKind);
+        Assert.Equal(5L, evidence.Snapshots[1].IngressSequence);
+        Assert.Equal(2, Assert.Single(evidence.Documents).ObservedDidOpens);
+        Assert.False(evidence.ReplayComplete);
+        Assert.DoesNotContain("old", System.Text.Json.JsonSerializer.Serialize(evidence));
+        Assert.DoesNotContain("new", System.Text.Json.JsonSerializer.Serialize(evidence));
+    }
+
+    [Fact]
+    public void Duplicate_ingress_and_change_after_close_are_not_claimed_complete()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "A", isDidOpen: true,
+            ingressSequence: 10);
+        state.CaptureClosed(new Uri(Document), ingressSequence: 11);
+        state.CaptureCommitted(new Uri(Document), 2, "AB", appliedChanges:
+        [
+            new DocumentChange(new TextRange(new TextPosition(0, 1),
+                new TextPosition(0, 1)), "B"),
+        ], ingressSequence: 11);
+        var evidence = state.InspectReplay();
+        Assert.Equal("non_increasing_document_ingress", evidence.FirstObservedIssue);
+        Assert.False(evidence.ReplayComplete);
+        Assert.Equal("did_open_not_observed", evidence.Snapshots[2].Issue is
+            "non_increasing_document_ingress" ? "did_open_not_observed" : evidence.Snapshots[2].Issue);
+    }
+
     private static CaptureConsentState ArmedJournal()
     {
         var state = new CaptureConsentState();
