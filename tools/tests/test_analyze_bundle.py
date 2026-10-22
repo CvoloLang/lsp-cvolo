@@ -10,6 +10,9 @@ import unittest
 import zipfile
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "analyze-diagnostic-bundle.py"
+# Loading by importlib spec does not put the script's directory on sys.path.
+# Match direct CLI resolution for its standalone causal_graph sibling module.
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location("cvolo_analyzer", SCRIPT)
 analyzer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(analyzer)
