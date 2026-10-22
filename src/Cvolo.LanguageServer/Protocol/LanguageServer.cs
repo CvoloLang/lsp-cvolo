@@ -476,6 +476,7 @@ internal sealed class LanguageServer(
                         verifyCaptureJournal = RecordingControlPlane.VerifyJournalMethod,
                         verifyCaptureCheckpoint = RecordingControlPlane.VerifyCheckpointMethod,
                         flightRecorderSnapshot = RecordingControlPlane.FlightSnapshotMethod,
+                        flightIncidentIndex = RecordingControlPlane.FlightIncidentIndexMethod,
                         triggerFlightRecorder = RecordingControlPlane.FlightTriggerMethod,
                         flightRecorderMetadataOnly = true,
                         inMemoryCaptureJournalSupported = true,
@@ -582,6 +583,14 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.FlightSnapshotMethod)]
     public FlightRecorderSnapshot GetFlightRecorderSnapshot()
         => RecordingControl.InspectFlightRecorder();
+
+    /// <summary>
+    /// Deterministic incident candidates; causal only for the observed
+    /// automatic fault trigger. No inferred root cause or sensitive payload.
+    /// </summary>
+    [JsonRpcMethod(RecordingControlPlane.FlightIncidentIndexMethod)]
+    public FlightIncidentIndex GetFlightIncidentIndex()
+        => RecordingControl.InspectFlightIncidentIndex();
 
     /// <summary>Explicit incident marker, usable while normal recording is off.</summary>
     [JsonRpcMethod(RecordingControlPlane.FlightTriggerMethod,

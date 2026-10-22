@@ -46,6 +46,68 @@ public sealed class LspFlightRecorderTests
     }
 
     [Fact]
+    public void Incident_index_causally_links_only_the_triggering_fault()
+    {
+        var recorder = new LspFlightRecorder();
+        recorder.OnTransportNotification("textDocument/didChange");
+        recorder.OnHandlerEntered("did_change", 9);
+        recorder.OnHandlerSettled("did_change", "faulted", 9);
+        var index = FlightIncidentAnalyzer.Analyze(recorder.Inspect());
+        var incident = Assert.Single(index.Incidents);
+        Assert.Equal("document_handler_faulted", incident.TriggerReason);
+        Assert.Equal("unknown", incident.RootCause);
+        Assert.NotNull(incident.FirstObservedTriggerSource);
+        Assert.Single(incident.Candidates, e => e.Association == "causal"
+            && e.Explanation == "automatic_trigger_source");
+        Assert.Contains(incident.Candidates, e => e.Association == "temporal_only");
+        Assert.Equal("volatile_only", index.Durability);
+    }
+
+    [Fact]
+    public void Multiple_manual_markers_remain_temporal_and_ordered()
+    {
+        var recorder = new LspFlightRecorder();
+        recorder.OnTransportNotification("textDocument/didOpen");
+        var first = recorder.Trigger(new FlightRecorderTriggerRequest
+        {
+            ProtocolVersion = 1, Category = "other",
+        }, true);
+        recorder.OnTransportNotification("textDocument/didClose");
+        var second = recorder.Trigger(new FlightRecorderTriggerRequest
+        {
+            ProtocolVersion = 1, Category = "diagnostics",
+        }, true);
+        var index = FlightIncidentAnalyzer.Analyze(recorder.Inspect());
+        Assert.Equal(2, index.Incidents.Count);
+        Assert.Equal(first.IncidentId, index.Incidents[0].IncidentId);
+        Assert.Equal(second.IncidentId, index.Incidents[1].IncidentId);
+        Assert.All(index.Incidents, incident =>
+        {
+            Assert.Equal("unknown", incident.RootCause);
+            Assert.Null(incident.FirstObservedTriggerSource);
+            Assert.All(incident.Candidates, candidate =>
+                Assert.Equal("temporal_only", candidate.Association));
+        });
+    }
+
+    [Fact]
+    public void Evicted_history_is_never_reported_as_complete_incident_evidence()
+    {
+        var recorder = new LspFlightRecorder();
+        recorder.OnTransportNotification("textDocument/didOpen");
+        for (int i = 0; i < LspFlightRecorder.MaxEvents + 20; i++)
+            recorder.OnTransportNotification("textDocument/didChange");
+        recorder.Trigger(new FlightRecorderTriggerRequest
+        {
+            ProtocolVersion = 1, Category = "other",
+        }, true);
+        var index = FlightIncidentAnalyzer.Analyze(recorder.Inspect());
+        Assert.True(index.IncidentHistoryIncomplete);
+        Assert.False(Assert.Single(index.Incidents).EvidenceComplete);
+        Assert.True(index.Incidents[0].WindowTruncated);
+    }
+
+    [Fact]
     public void Ring_is_bounded_and_reports_overwritten_prefix()
     {
         var recorder = new LspFlightRecorder();

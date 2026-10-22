@@ -23,7 +23,10 @@ internal sealed record CaptureInputReconciliation(
     int HandlerEntries = 0, int UnsettledHandlerEntries = 0,
     int HandlerEntriesWithoutIngress = 0,
     int SettlementsWithoutObservedHandler = 0,
-    int DuplicateHandlerEntries = 0);
+    int DuplicateHandlerEntries = 0,
+    int FullyObservedDownstreamChains = 0,
+    bool TransportToHandlerIdentityProven = false,
+    bool AllDocumentInputsCompleteProven = false);
 
 /// <summary>
 /// Independently reconciles server-settled document inputs with retained source
@@ -180,11 +183,39 @@ internal static class CaptureInputReconciler
                     unmatchedSettlements++;
         }
 
+        // These chains confirm handler -> outcome -> optional source snapshot
+        // for specific witnessed ingress IDs. The original transport frame
+        // identity was not propagated here, so this is not stream completeness.
+        var distinctEntries = entered is null
+            ? new HashSet<(string Uri, long Seq, string Kind)>()
+            : entered.Where(e => e.IngressSequence is > 0)
+                .Select(e => (e.DocumentUri, e.IngressSequence!.Value, e.InputKind))
+                .ToHashSet();
+        int downstreamChains = 0;
+        foreach (var input in inputs)
+        {
+            if (input.IngressSequence is not > 0
+                || !distinctEntries.Contains((input.DocumentUri,
+                    input.IngressSequence.Value, input.InputKind)))
+                continue;
+            bool snapshotPresent = byIngress.TryGetValue(
+                (input.DocumentUri, input.IngressSequence.Value),
+                out var snap)
+                && snap is not null
+                && (snap.IsDidClose ? "did_close"
+                    : snap.IsDidOpen ? "did_open" : "did_change") == input.InputKind;
+            if ((input.Outcome == "applied" && snapshotPresent)
+                || (input.Outcome == "rejected" && !snapshotPresent))
+                downstreamChains++;
+        }
+
         // Unsettled is a live/potentially interrupted operation, NOT proven
-        // loss. A terminal input barrier would be required to distinguish them.
+        // loss. Even all observed downstream chains never establish that the
+        // unscoped transport delivered EVERY original input.
         return new(firstIssue, firstIssueIngress, inputs.Count,
             applied, rejected, matched, unknown,
             entered?.Count ?? 0, unsettled, unknownEntries,
-            unmatchedSettlements, duplicateEntries);
+            unmatchedSettlements, duplicateEntries,
+            downstreamChains, false, false);
     }
 }

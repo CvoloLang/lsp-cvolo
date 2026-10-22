@@ -178,6 +178,39 @@ public sealed class CaptureInputReconcilerTests
     }
 
     [Fact]
+    public void Witnessed_downstream_chains_are_counted_without_transport_completeness_claim()
+    {
+        var result = CaptureInputReconciler.Reconcile(
+            [
+                new(Document, "did_open", "applied", 1, 10),
+                new(Document, "did_change", "rejected", 2, 11),
+                new(Document, "did_change", "applied", 3, 15),
+            ],
+            [Open(Document, 1, 10), Change(Document, 3, 15)],
+            [
+                new(Document, "did_open", 1, 10),
+                new(Document, "did_change", 2, 11),
+                new(Document, "did_change", 3, 15),
+            ]);
+        Assert.Null(result.FirstIssue);
+        Assert.Equal(3, result.FullyObservedDownstreamChains);
+        Assert.False(result.TransportToHandlerIdentityProven);
+        Assert.False(result.AllDocumentInputsCompleteProven);
+    }
+
+    [Fact]
+    public void Missing_handler_entry_cannot_establish_full_downstream_chain()
+    {
+        var result = CaptureInputReconciler.Reconcile(
+            [new(Document, "did_open", "applied", 1, 2)],
+            [Open(Document, 1, 2)],
+            Array.Empty<CapturedDocumentHandlerEntry>());
+        Assert.Equal(0, result.FullyObservedDownstreamChains);
+        Assert.Equal(1, result.SettlementsWithoutObservedHandler);
+        Assert.False(result.AllDocumentInputsCompleteProven);
+    }
+
+    [Fact]
     public void Concurrent_documents_do_not_share_snapshots_by_ingress()
     {
         var result = CaptureInputReconciler.Reconcile(

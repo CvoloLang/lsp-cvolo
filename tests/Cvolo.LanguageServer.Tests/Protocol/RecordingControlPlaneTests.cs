@@ -586,6 +586,35 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Incident_index_is_safe_temporal_only_for_user_markers()
+    {
+        using var session = ProtocolSession.Start();
+        await session.Client.InitializeAsync();
+        await session.Client.NotifyDidChangeAsync(
+            new Uri("file:///C:/private/SECRET_NAME.cvl"), 3,
+            new Microsoft.VisualStudio.LanguageServer.Protocol.TextDocumentContentChangeEvent
+            {
+                Text = "PRIVATE_SOURCE_FOR_INDEX",
+            });
+        await session.Client.DrainNotificationsAsync();
+        var triggered = await session.Client.TriggerFlightRecorderAsync("other");
+        JObject index = await session.Client.GetFlightIncidentIndexAsync();
+
+        Assert.False((bool)index["sourceContentCaptured"]!);
+        Assert.Equal("no_root_cause_claimed", (string?)index["rootCausePolicy"]);
+        var incident = Assert.Single((JArray)index["incidents"]!);
+        Assert.Equal((string?)triggered["incidentId"], (string?)incident["incidentId"]);
+        Assert.Equal("unknown", (string?)incident["rootCause"]);
+        Assert.Null(incident["firstObservedTriggerSource"]?.Type == JTokenType.Null
+            ? null : incident["firstObservedTriggerSource"]);
+        Assert.All((JArray)incident["candidates"]!, candidate =>
+            Assert.Equal("temporal_only", (string?)candidate["association"]));
+        string json = index.ToString();
+        Assert.DoesNotContain("PRIVATE_SOURCE_FOR_INDEX", json);
+        Assert.DoesNotContain("SECRET_NAME.cvl", json);
+    }
+
+    [Fact]
     public async Task Flight_trigger_is_validated_even_without_normal_recording()
     {
         using var session = ProtocolSession.Start();

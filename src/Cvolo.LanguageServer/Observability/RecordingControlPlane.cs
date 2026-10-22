@@ -24,6 +24,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string VerifyCheckpointMethod = "cvolo/observability/verifyCaptureCheckpoint.v1";
     internal const string FlightSnapshotMethod = "cvolo/observability/flightRecorderSnapshot.v1";
     internal const string FlightTriggerMethod = "cvolo/observability/triggerFlightRecorder.v1";
+    internal const string FlightIncidentIndexMethod = "cvolo/observability/flightIncidentIndex.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
@@ -32,6 +33,9 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     private readonly LspFlightRecorder _flightRecorder = new();
 
     internal FlightRecorderSnapshot InspectFlightRecorder() => _flightRecorder.Inspect();
+
+    internal FlightIncidentIndex InspectFlightIncidentIndex()
+        => FlightIncidentAnalyzer.Analyze(_flightRecorder.Inspect());
 
     internal FlightRecorderTriggerAck TriggerFlightRecorder(
         FlightRecorderTriggerRequest? request, bool initialized)

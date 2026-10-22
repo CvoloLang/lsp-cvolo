@@ -125,6 +125,9 @@ internal sealed class TestClient : IDisposable
     public Task<JObject> GetFlightRecorderSnapshotAsync() =>
         _rpc.InvokeAsync<JObject>("cvolo/observability/flightRecorderSnapshot.v1");
 
+    public Task<JObject> GetFlightIncidentIndexAsync() =>
+        _rpc.InvokeAsync<JObject>("cvolo/observability/flightIncidentIndex.v1");
+
     public Task<JObject> TriggerFlightRecorderAsync(
         string category = "other", int protocolVersion = 1) =>
         _rpc.InvokeWithParameterObjectAsync<JObject>(
