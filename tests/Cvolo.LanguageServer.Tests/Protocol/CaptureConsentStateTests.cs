@@ -335,6 +335,40 @@ public sealed class CaptureConsentStateTests
         Assert.Equal("non_increasing_document_ingress", evidence.Snapshots[2].Issue);
     }
 
+    [Fact]
+    public void Close_outside_consent_scope_and_after_revoke_never_retains_evidence()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "private", isDidOpen: true,
+            ingressSequence: 1);
+        state.CaptureClosed(new Uri("file:///C:/project/unrelated.cvl"),
+            ingressSequence: 2);
+        Assert.Single(state.CopyJournalForVerification());
+
+        state.Revoke(new CaptureConsentRevoke
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+        }, ServerId);
+        state.CaptureClosed(new Uri(Document), ingressSequence: 3);
+        Assert.Empty(state.CopyJournalForVerification());
+        Assert.Empty(state.InspectReplay().Snapshots);
+    }
+
+    [Fact]
+    public void Close_does_not_claim_a_complete_document_replay()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "private", isDidOpen: true,
+            ingressSequence: 17);
+        state.CaptureClosed(new Uri(Document), ingressSequence: 19);
+        var result = state.InspectReplay();
+        Assert.Null(result.FirstObservedIssue);
+        Assert.False(result.ReplayComplete);
+        Assert.Equal("did_close", result.Snapshots[1].InputKind);
+        Assert.Equal(19L, result.Snapshots[1].IngressSequence);
+        Assert.Equal(0, result.Snapshots[1].Utf16CodeUnits);
+    }
+
     private static CaptureConsentState ArmedJournal()
     {
         var state = new CaptureConsentState();
