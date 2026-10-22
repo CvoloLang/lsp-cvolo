@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using Cvolo.LanguageServer.Core.Editing;
 
 namespace Cvolo.LanguageServer.Observability;
 
@@ -85,11 +84,11 @@ internal static class CaptureReplayVerifier
                     issue ??= "edit_batch_not_retained";
                 else if (doc.LastText is not null)
                 {
-                    // Replay the ORIGINAL accepted LSP UTF-16 edits against
-                    // our own last retained input, not against DocumentStore.
-                    // This verifies a second implementation path and ensures
+                    // Independently replay accepted LSP UTF-16 edits using an
+                    // implementation separate from DocumentStore and its editor.
+                    // This checks
                     // CRLF, surrogate pairs and multi-edit batches agree.
-                    if (!IncrementalTextEditor.TryApplyChanges(
+                    if (!CaptureEditReplayer.TryReplay(
                         doc.LastText, snapshot.AppliedChanges, out string reproduced))
                         issue ??= "replay_invalid_utf16_range";
                     else if (!string.Equals(reproduced, snapshot.Text,
