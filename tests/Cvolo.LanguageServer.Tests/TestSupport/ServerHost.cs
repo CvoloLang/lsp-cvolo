@@ -65,13 +65,15 @@ internal sealed class ServerHost : IDisposable
         formatter.JsonSerializer.NullValueHandling = NullValueHandling.Ignore;
         formatter.JsonSerializer.Converters.Add(new UriJsonConverter());
         RpcObservability rpcObservability = new(server.Observer);
+        IngressPipeline ingress = new();
+        ingress.DocumentIngressAdmitted = server.ObserveAssignedDocumentIngress;
+        server.Ingress = ingress;
         HeaderDelimitedMessageHandler handler = new ObservedHeaderDelimitedHandler(
             serverOutput, transport.ServerInput, formatter, rpcObservability,
             () => server.HasPendingRejectedInitializeResponse,
             server.OnRejectedInitializeResponseFlushed,
-            server.ObserveTransportDocumentNotification);
-        IngressPipeline ingress = new();
-        server.Ingress = ingress;
+            server.ObserveTransportDocumentNotification,
+            ingress.ObserveInboundRpc);
         JsonRpc rpc = new(handler);
         rpcObservability.Attach(rpc);
         rpc.SynchronizationContext = new IngressSynchronizationContext(ingress);

@@ -62,12 +62,16 @@ internal static class ServerPipeline
             stdin = new TeeStream(stdin, rawSink);
         }
 
+        IngressPipeline ingress = new();
+        ingress.DocumentIngressAdmitted = server.ObserveAssignedDocumentIngress;
+        server.Ingress = ingress;
         using RpcObservability rpcObservability = new(observability.Observer);
         using ObservedHeaderDelimitedHandler handler = new(
             stdout, stdin, formatter, rpcObservability,
             () => server.HasPendingRejectedInitializeResponse,
             server.OnRejectedInitializeResponseFlushed,
-            server.ObserveTransportDocumentNotification);
+            server.ObserveTransportDocumentNotification,
+            ingress.ObserveInboundRpc);
         observability.Emit(new CompilerEvent
         {
             Event = "transport.ready",
@@ -76,8 +80,6 @@ internal static class ServerPipeline
             Priority = EventPriority.P0,
             Outcome = "ready",
         });
-        IngressPipeline ingress = new();
-        server.Ingress = ingress;
         JsonRpc rpc = new(handler);
         rpcObservability.Attach(rpc);
         rpc.SynchronizationContext = new IngressSynchronizationContext(ingress);

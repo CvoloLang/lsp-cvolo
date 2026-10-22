@@ -22,8 +22,8 @@ public sealed class IngressSynchronizationContext(IngressPipeline pipeline) : Sy
     {
         ArgumentNullException.ThrowIfNull(d);
 
-        // Assigned on the single receive loop, so it is the true frame order.
-        IngressSequence sequence = _pipeline.Sequencer.Next();
+        // The identity was allocated by the transport reader before handler dispatch.
+        IngressSequence sequence = _pipeline.AssignDispatch();
 
         // Preserve the ambient sequence for callbacks posted from within an
         // already-stamped dispatch (for example a nested Post from a handler).
@@ -46,7 +46,7 @@ public sealed class IngressSynchronizationContext(IngressPipeline pipeline) : Sy
     public override void Send(SendOrPostCallback d, object? state)
     {
         ArgumentNullException.ThrowIfNull(d);
-        IngressSequence sequence = _pipeline.Sequencer.Next();
+        IngressSequence sequence = _pipeline.AssignDispatch();
         IngressSequence parent = IngressScope.Current;
         IngressScope.Set(sequence);
         try
