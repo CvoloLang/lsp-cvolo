@@ -231,7 +231,17 @@ public sealed class RpcBoundaryObservabilityTests
         observer.SetMode(ObservabilityMode.Detailed);
         await session.Client.TryUnknownRequestAsync();
 
-        var events = Drain(queue);
+        // Transport response completion can precede the observer's
+        // response-sent callback. Await the actual terminal telemetry event
+        // rather than racing immediate queue collection.
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return events.Any(e => e.Event.Event == "rpc.request.received")
+                && events.Any(e => e.Event.Event == "rpc.response.sent");
+        }, "request and response telemetry after mode activation");
+
         var received = Assert.Single(events, e => e.Event.Event == "rpc.request.received");
         var sent = Assert.Single(events, e => e.Event.Event == "rpc.response.sent");
 

@@ -169,7 +169,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     /// Consent, scope, TTL and byte limits are all checked atomically against
     /// revoke before retaining even a reference to the source string.
     /// </summary>
-    internal void CaptureCommitted(Uri? uri, int version, string? sourceText)
+    internal void CaptureCommitted(Uri? uri, int version, string? sourceText, bool isDidOpen = false)
     {
         if (uri is null || sourceText is null)
             return;
@@ -208,12 +208,22 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 return;
             }
 
-            _journal.Add(new(uri.AbsoluteUri, version, sourceText));
+            _journal.Add(new(uri.AbsoluteUri, version, sourceText,
+                CaptureReplayVerifier.ComputeDigest(sourceText), isDidOpen));
             _journalChars += sourceText.Length;
         }
     }
 
     /// <summary>Internal verifier access; never exposed by a JSON-RPC method.</summary>
+    internal CaptureReplayEvidence InspectReplay()
+    {
+        lock (_gate)
+        {
+            ExpireIfNeeded();
+            return CaptureReplayVerifier.Inspect(_journal, _journalIncomplete);
+        }
+    }
+
     internal IReadOnlyList<CapturedDocumentSnapshot> CopyJournalForVerification()
     {
         lock (_gate)
@@ -324,4 +334,5 @@ internal sealed record CaptureJournalAck(
 
 /// <summary>Private in-memory source; never serialized by the RPC layer.</summary>
 internal sealed record CapturedDocumentSnapshot(
-    string DocumentUri, int Version, string Text);
+    string DocumentUri, int Version, string Text,
+    string Sha256Utf16Le, bool IsDidOpen);

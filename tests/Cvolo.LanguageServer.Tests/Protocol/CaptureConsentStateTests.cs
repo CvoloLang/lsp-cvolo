@@ -154,6 +154,67 @@ public sealed class CaptureConsentStateTests
     }
 
     [Fact]
+    public void Verified_snapshots_preserve_utf16_hash_and_observed_baseline()
+    {
+        var state = new CaptureConsentState();
+        var grant = state.Grant(new CaptureConsentGrant
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            UserConfirmed = true, CaptureSources = true, TtlSeconds = 60,
+            DocumentUris = [Document],
+        }, ServerId);
+        state.Arm(new CaptureJournalArm
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            LeaseId = grant.LeaseId,
+        }, ServerId);
+
+        state.CaptureCommitted(new Uri(Document), 1, "x😀", isDidOpen: true);
+        state.CaptureCommitted(new Uri(Document), 3, "x😀!", isDidOpen: false);
+
+        var result = state.InspectReplay();
+        Assert.Equal("retained_snapshots_inspected", result.Status);
+        Assert.False(result.ReplayComplete);
+        Assert.True(result.HistoryPrefixUnknown);
+        Assert.Equal(2, result.CapturedSnapshots);
+        Assert.Null(result.FirstObservedIssue);
+        Assert.Equal("did_open", result.Snapshots[0].InputKind);
+        Assert.Equal(3, result.Snapshots[0].Utf16CodeUnits);
+        Assert.Equal(CaptureReplayVerifier.ComputeDigest("x😀"),
+            result.Snapshots[0].Sha256Utf16Le);
+        Assert.Equal("did_change", result.Snapshots[1].InputKind);
+        Assert.Equal(3, result.Snapshots[1].Version);
+        Assert.DoesNotContain("project", System.Text.Json.JsonSerializer.Serialize(result));
+    }
+
+    [Fact]
+    public void Journal_without_didopen_reports_first_unverifiable_input()
+    {
+        var state = new CaptureConsentState();
+        var grant = state.Grant(new CaptureConsentGrant
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            UserConfirmed = true, CaptureSources = true, TtlSeconds = 60,
+            DocumentUris = [Document],
+        }, ServerId);
+        state.Arm(new CaptureJournalArm
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            LeaseId = grant.LeaseId,
+        }, ServerId);
+        state.CaptureCommitted(new Uri(Document), 2, "text", isDidOpen: false);
+        var evidence = state.InspectReplay();
+        Assert.Equal("did_open_not_observed", evidence.FirstObservedIssue);
+        Assert.Equal("retained_snapshot_issues", evidence.Status);
+        Assert.False(evidence.ReplayComplete);
+        state.Revoke(new CaptureConsentRevoke
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+        }, ServerId);
+        Assert.Empty(state.InspectReplay().Snapshots);
+    }
+
+    [Fact]
     public void Revoke_is_idempotent_and_clears_source_and_path_scope()
     {
         var state = new CaptureConsentState();

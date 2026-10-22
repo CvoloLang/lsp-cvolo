@@ -32,7 +32,7 @@ internal sealed class TextDocumentSyncHandler(
     Action? onProjectChanged = null,
     Func<OrderedInputQueue?>? inputQueueAccessor = null,
     ICompilerObserver? observer = null,
-    Action<Uri, int, string>? onAppliedDocument = null) : IDisposable
+    Action<Uri, int, string, bool>? onAppliedDocument = null) : IDisposable
 {
     private const string CvoloLanguageId = "cvolo";
 
@@ -145,7 +145,7 @@ internal sealed class TextDocumentSyncHandler(
         }
         // The journal is optional; even a faulty diagnostic sink must never
         // change document semantics or block a successful editor update.
-        try { onAppliedDocument?.Invoke(item.Uri, opened.Version.Value, opened.Text); }
+        try { onAppliedDocument?.Invoke(item.Uri, opened.Version.Value, opened.Text, true); }
         catch (Exception) { }
         LogTiming("didOpen/store", stopwatch, documentUri, 100);
 
@@ -198,7 +198,7 @@ internal sealed class TextDocumentSyncHandler(
             logger.Debug($"[diag] didChange for '{documentUri}' v{textDocument.Version} was not applied; diagnostics not scheduled.");
             return Rejected(DidChangeRejectedEvent, "store_not_applied", textDocument.Version);
         }
-        try { onAppliedDocument?.Invoke(textDocument.Uri, changed.Version.Value, changed.Text); }
+        try { onAppliedDocument?.Invoke(textDocument.Uri, changed.Version.Value, changed.Text, false); }
         catch (Exception) { }
         LogTiming("didChange/store", stopwatch, documentUri);
 

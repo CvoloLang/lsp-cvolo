@@ -20,6 +20,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string RevokeConsentMethod = "cvolo/observability/revokeCaptureConsent.v1";
     internal const string ConsentStatusMethod = "cvolo/observability/captureConsentStatus.v1";
     internal const string ArmJournalMethod = "cvolo/observability/armCaptureJournal.v1";
+    internal const string VerifyJournalMethod = "cvolo/observability/verifyCaptureJournal.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
@@ -273,8 +274,11 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     }
 
     /// <summary>Never emits source text; retains bounded snapshots in RAM only.</summary>
-    internal void CaptureCommittedDocument(Uri? uri, int version, string? text)
-        => _captureConsent.CaptureCommitted(uri, version, text);
+    internal void CaptureCommittedDocument(Uri? uri, int version, string? text, bool isDidOpen)
+        => _captureConsent.CaptureCommitted(uri, version, text, isDidOpen);
+
+    internal CaptureReplayEvidence VerifyCaptureJournal()
+        => _captureConsent.InspectReplay();
 
     internal RecordingPolicyAck Apply(RecordingPolicyRequest? request, bool initialized)
     {
