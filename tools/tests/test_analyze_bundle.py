@@ -103,7 +103,7 @@ class AnalyzerTests(unittest.TestCase):
             run = subprocess.run([sys.executable, str(SCRIPT), str(f), str(dest)],
                                  capture_output=True, text=True)
             self.assertEqual(0, run.returncode, run.stderr)
-            self.assertEqual({"summary.md", "integrity.json", "incident-index.json", "operations.json", "diagnostic-report.txt"},
+            self.assertEqual({"summary.md", "integrity.json", "incident-index.json", "operations.json", "diagnostic-report.txt", "assertions.json", "performance.json", "timeline.jsonl"},
                              {p.name for p in dest.iterdir()})
             self.assertEqual(1, len(json.loads((dest / "incident-index.json").read_text())["markers"]))
 
@@ -190,6 +190,37 @@ class AnalyzerTests(unittest.TestCase):
             audit = analyzer.analyze(f)["operations.json"]["dependencyAudit"]
             self.assertEqual("dependency_target_unavailable", audit["unresolvedLinks"][0]["reason"])
             self.assertEqual("multiple_terminal_events_observed", audit["lifecycleFindings"][0]["finding"])
+
+
+    def test_timeline_redacts_unclassified_attributes_and_keeps_sequence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "trace.zip"
+            make_zip(f, [
+                event(3, "operation.completed", elapsedUs=300,
+                      clockId="clock-"+"a"*32, monotonicTicks=3,
+                      attributes={"source": "/secret/file.cvl", "secret": "private"}),
+                event(1, "operation.completed", elapsedUs=100,
+                      clockId="clock-"+"a"*32, monotonicTicks=1),
+                event(2, "operation.completed", elapsedUs=200,
+                      clockId="clock-"+"a"*32, monotonicTicks=2),
+            ])
+            out = analyzer.analyze(f)
+            timeline = [json.loads(x) for x in out["timeline.jsonl"].splitlines()]
+            self.assertEqual([1, 2, 3], [x["producerSequence"] for x in timeline])
+            self.assertNotIn("/secret/file.cvl", json.dumps(out))
+            self.assertEqual("pass", out["assertions.json"]["invariants"][0]["status"])
+
+    def test_negative_duration_has_evidence_and_no_fabricated_critical_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "trace.zip"
+            make_zip(f, [event(1, "operation.completed", elapsedUs=-5,
+                               clockId="clock-"+"a"*32, monotonicTicks=10)])
+            out = analyzer.analyze(f)
+            self.assertEqual("fail", out["assertions.json"]["invariants"][1]["status"])
+            self.assertEqual("events/segment-0000.jsonl:1",
+                             out["assertions.json"]["invariants"][1]["evidence"][0]["eventRef"])
+            self.assertEqual("unknown", out["performance.json"]["criticalPath"])
+            self.assertIn("observed_invariant_violation", out["integrity.json"]["warnings"])
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import sys
 import zipfile
 from causal_graph import make_graph, marker_request_candidates
 from dependency_audit import inspect_dependencies
+from timeline_audit import audit_observed_events
 from pathlib import Path
 from datetime import datetime
 
@@ -148,6 +149,10 @@ def analyze(path):
             records.append({
                 "eventRef": ref, "_emitter": emitter, "_seq": sequence,
                 "_time": event_time(row.get("timestampUtc")), "recordingEpoch": epoch,
+                "_clock": row.get("clockId") if isinstance(row.get("clockId"), str) and re.fullmatch(r"clock-[a-f0-9]{32}", row["clockId"]) else None,
+                "_ticks": row.get("monotonicTicks") if type(row.get("monotonicTicks")) is int and row["monotonicTicks"] >= 0 else None,
+                "elapsedUs": row.get("elapsedUs") if type(row.get("elapsedUs")) is int else None,
+                "documentSessionId": row.get("documentSessionId") if isinstance(row.get("documentSessionId"), str) else None,
                 "event": word(row["event"]), "outcome": word(row.get("outcome")),
                 "reason": word(row.get("reason")),
                 "markerId": safe_id(row.get("clientActionId"), MARKER),
@@ -165,6 +170,7 @@ def analyze(path):
     records.sort(key=lambda e: (e["_emitter"], e["_seq"]))
     graph, request_events = make_graph(records)
     graph["dependencyAudit"] = inspect_dependencies(records)
+    timeline, assertions, performance = audit_observed_events(records, graph)
     markers = []
     for marker in (x for x in records if x["event"] == "diagnostic.marker" and x["markerId"]):
         nearby_events, request_candidates = marker_request_candidates(marker, records, request_events)
@@ -205,6 +211,8 @@ def analyze(path):
         warnings.append("unresolved_operation_links")
     if graph["dependencyAudit"]["lifecycleFindings"]:
         warnings.append("operation_lifecycle_uncertainty")
+    if any(check["status"] == "fail" for check in assertions["invariants"]):
+        warnings.append("observed_invariant_violation")
     integrity = {
         "analyzerVersion": 1, "archiveHashesVerified": True,
         "payloadOrder": "per_emitter_producer_sequence", "validEventCount": len(records),
@@ -237,6 +245,11 @@ def analyze(path):
     summary += ["", "## Operation dependency audit", ""]
     audit = graph["dependencyAudit"]
     summary.append("Explicit links: " + str(audit["edgeCount"]) + "; unresolved: " + str(len(audit["unresolvedLinks"])) + "; lifecycle findings: " + str(len(audit["lifecycleFindings"])) + ".")
+    summary += ["", "## Observed invariants", ""]
+    for check in assertions["invariants"]:
+        summary.append("- " + check["invariant"] + ": " + check["status"]
+                       + ", checked=" + str(check["checkedSamples"])
+                       + ", findings=" + str(check["findingCount"]) + ".")
     summary += ["", "## Observed request chains", ""]
     for req in graph["requests"][:200]:
         failure = req["firstObservedFailure"]
@@ -249,11 +262,16 @@ def analyze(path):
               + json.dumps(integrity, sort_keys=True, indent=2) + "\n\nINCIDENT INDEX\n"
               + json.dumps(index, sort_keys=True, indent=2) + "\n\nOPERATION GRAPH\n"
               + json.dumps(graph, sort_keys=True, indent=2)
-              + "\n\nFULL EVENT TIMELINE: not embedded; original verified ZIP required. "
+              + "\n\nASSERTIONS\n" + json.dumps(assertions, sort_keys=True, indent=2)
+              + "\n\nPERFORMANCE\n" + json.dumps(performance, sort_keys=True, indent=2)
+              + "\n\nFULL EVENT TIMELINE: emitted separately in timeline.jsonl; original verified ZIP required for raw evidence. "
                 "This standalone report is incomplete for replay.\n")
+    sanitized_timeline = "".join(json.dumps(item, sort_keys=True, ensure_ascii=True) + "\n"
+                                 for item in timeline)
     return {"integrity.json": integrity, "incident-index.json": index,
-            "operations.json": graph, "summary.md": summary_text,
-            "diagnostic-report.txt": report}
+            "operations.json": graph, "assertions.json": assertions,
+            "performance.json": performance, "timeline.jsonl": sanitized_timeline,
+            "summary.md": summary_text, "diagnostic-report.txt": report}
 
 
 def main(argv=None):
