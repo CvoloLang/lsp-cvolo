@@ -534,6 +534,23 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Read_barrier_checkpoint_is_explicitly_not_producer_closure()
+    {
+        var (observer, _) = CreateObserver();
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync();
+
+        JObject evidence = await session.Client.VerifyCaptureCheckpointAsync();
+        JObject barrier = Assert.IsType<JObject>(evidence["verificationBarrier"]);
+        Assert.Equal("satisfied", (string?)barrier["status"]);
+        Assert.True((long?)barrier["requestIngressSequence"] > 0);
+        Assert.False((bool)barrier["transportToHandlerCompleteProven"]!);
+        Assert.False((bool)barrier["durableProducerClosureProven"]!);
+        Assert.False((bool)evidence["replayComplete"]!);
+        Assert.NotEqual("complete", (string?)evidence["documentReplayCompleteness"]);
+    }
+
+    [Fact]
     public async Task Noop_observer_cannot_report_a_successful_start()
     {
         using var session = ProtocolSession.Start();

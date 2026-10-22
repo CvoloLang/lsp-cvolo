@@ -474,6 +474,7 @@ internal sealed class LanguageServer(
                         getCaptureConsentStatus = RecordingControlPlane.ConsentStatusMethod,
                         armCaptureJournal = RecordingControlPlane.ArmJournalMethod,
                         verifyCaptureJournal = RecordingControlPlane.VerifyJournalMethod,
+                        verifyCaptureCheckpoint = RecordingControlPlane.VerifyCheckpointMethod,
                         inMemoryCaptureJournalSupported = true,
                         sourceExportSupported = false,
                         capturePipelineSupported = false,
@@ -570,6 +571,60 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.VerifyJournalMethod)]
     public CaptureReplayEvidence VerifyCaptureJournal()
         => RecordingControl.VerifyCaptureJournal();
+
+    /// <summary>
+    /// Reads a checkpoint after earlier REGISTERED document input handlers
+    /// have settled. The queue cannot prove transport-to-handler completeness,
+    /// and this read does not seal the producer or persist any sources.
+    /// </summary>
+    [JsonRpcMethod(RecordingControlPlane.VerifyCheckpointMethod)]
+    public async Task<CaptureReplayEvidence> VerifyCaptureCheckpointAsync(
+        CancellationToken cancellationToken)
+    {
+        IngressSequence atEntry = IngressScope.Current;
+        OrderedInputQueue? queue = Ingress?.Inputs;
+        if (queue is null || atEntry.IsNone)
+        {
+            return RecordingControl.VerifyCaptureJournal() with
+            {
+                VerificationBarrier = new CaptureVerificationBarrier(
+                    "unavailable", atEntry.IsNone ? null : atEntry.Value,
+                    null, 0, false, false),
+            };
+        }
+
+        BarrierOutcome result;
+        try
+        {
+            result = await queue.WaitForInputsBeforeAsync(
+                atEntry, TimeSpan.FromSeconds(2), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            result = BarrierOutcome.Completed;
+        }
+
+        // 'SettledThrough' is a high watermark, NOT a contiguous producer
+        // sequence. A satisfied read barrier only covers admitted predecessors.
+        var metrics = queue.Metrics;
+        var report = RecordingControl.VerifyCaptureJournal();
+        return report with
+        {
+            VerificationBarrier = new CaptureVerificationBarrier(
+                result switch
+                {
+                    BarrierOutcome.Satisfied => "satisfied",
+                    BarrierOutcome.TimedOut => "timed_out",
+                    _ => "completed_or_cancelled",
+                },
+                atEntry.Value,
+                queue.SettledThrough.IsNone ? null : queue.SettledThrough.Value,
+                metrics.Queued,
+                false,
+                false),
+        };
+    }
 
     /// <summary>
     /// Applies an explicit mode request and returns the server-owned epoch.

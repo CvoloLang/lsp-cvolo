@@ -519,6 +519,41 @@ public sealed class CaptureConsentStateTests
         Assert.Equal(0, state.InspectReplay().TransportWitness!.ObservedNotifications);
     }
 
+    [Fact]
+    public void First_known_failure_uses_earlier_ingress_instead_of_snapshot_iteration_order()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "abc", isDidOpen: true,
+            ingressSequence: 10);
+        state.CaptureSettled(new Uri(Document), "did_open", "applied", 1, 10);
+        state.CaptureCommitted(new Uri(Document), 3, "WRONG", appliedChanges:
+        [
+            new DocumentChange(new TextRange(
+                new TextPosition(0, 1), new TextPosition(0, 2)), "X"),
+        ], ingressSequence: 30);
+        state.CaptureSettled(new Uri(Document), "did_change", "applied", 2, 20);
+        var evidence = state.InspectReplay();
+        Assert.Equal("applied_input_snapshot_missing", evidence.FirstObservedIssue);
+        Assert.Equal(20L, evidence.FirstKnownFailure!.IngressSequence);
+        Assert.Equal("input_reconciliation", evidence.FirstKnownFailure.EvidenceSource);
+        Assert.False(evidence.ReplayComplete);
+    }
+
+    [Fact]
+    public void Missing_ingress_makes_first_known_failure_order_uncertain()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 1, "abc", isDidOpen: true);
+        state.CaptureCommitted(new Uri(Document), 2, "MISMATCH", appliedChanges:
+        [
+            new DocumentChange(null, "different"),
+        ], ingressSequence: 40);
+        var result = state.InspectReplay();
+        Assert.Equal("replayed_text_mismatch", result.FirstObservedIssue);
+        Assert.Equal(40L, result.FirstKnownFailure!.IngressSequence);
+        Assert.True(result.FirstKnownFailure.AllFailureOrdersKnown);
+    }
+
     private static CaptureConsentState ArmedJournal()
     {
         var state = new CaptureConsentState();

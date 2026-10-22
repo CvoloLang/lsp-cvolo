@@ -21,6 +21,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string ConsentStatusMethod = "cvolo/observability/captureConsentStatus.v1";
     internal const string ArmJournalMethod = "cvolo/observability/armCaptureJournal.v1";
     internal const string VerifyJournalMethod = "cvolo/observability/verifyCaptureJournal.v1";
+    internal const string VerifyCheckpointMethod = "cvolo/observability/verifyCaptureCheckpoint.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;

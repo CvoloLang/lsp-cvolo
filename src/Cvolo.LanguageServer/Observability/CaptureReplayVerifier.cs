@@ -126,6 +126,26 @@ internal static class CaptureReplayVerifier
         CaptureInputReconciliation reconciliation = CaptureInputReconciler.Reconcile(
             inputs ?? Array.Empty<CapturedDocumentInput>(), snapshots, entered);
         bool problems = firstIssue is not null || reconciliation.FirstIssue is not null;
+        // Compute the earliest KNOWN ingress violation across independent
+        // snapshot and input ledgers. An unknown sequence cannot be ordered,
+        // so the "all orders known" flag must remain false in that case.
+        var candidates = entries
+            .Where(e => e.Issue is not null)
+            .Select(e => new CaptureFirstKnownFailure(
+                e.Issue!, e.IngressSequence, e.Version, "snapshot"))
+            .ToList();
+        if (reconciliation.FirstIssue is not null)
+            candidates.Add(new CaptureFirstKnownFailure(
+                reconciliation.FirstIssue,
+                reconciliation.FirstIssueIngressSequence, null, "input_reconciliation"));
+        bool allOrdersKnown = candidates.All(c => c.IngressSequence is > 0);
+        CaptureFirstKnownFailure? firstKnown = candidates
+            .Where(c => c.IngressSequence is > 0)
+            .OrderBy(c => c.IngressSequence)
+            .FirstOrDefault()
+            ?? candidates.FirstOrDefault();
+        if (firstKnown is not null)
+            firstKnown = firstKnown with { AllFailureOrdersKnown = allOrdersKnown };
         return new CaptureReplayEvidence(
             ProtocolVersion: 1,
             Status: problems ? "retained_snapshot_issues" : "retained_snapshots_inspected",
@@ -133,7 +153,7 @@ internal static class CaptureReplayVerifier
             HistoryPrefixUnknown: journalIncomplete,
             CapturedSnapshots: snapshots.Count,
             DigestAlgorithm: DigestAlgorithm,
-            FirstObservedIssue: firstIssue ?? reconciliation.FirstIssue,
+            FirstObservedIssue: firstKnown?.Reason ?? firstIssue ?? reconciliation.FirstIssue,
             Documents: documents,
             Snapshots: entries.ToArray(),
             Limitations:
@@ -157,7 +177,8 @@ internal static class CaptureReplayVerifier
             SemanticReplayCompleteness: "unknown",
             InputReconciliation: reconciliation,
             InputLedgerIncomplete: inputLedgerIncomplete,
-            TransportWitness: transportWitness);
+            TransportWitness: transportWitness,
+            FirstKnownFailure: firstKnown);
     }
 
     private sealed class DocumentEvidenceBuilder(string id)
@@ -199,7 +220,31 @@ internal sealed record CaptureReplayEvidence(
     string SemanticReplayCompleteness = "unknown",
     CaptureInputReconciliation? InputReconciliation = null,
     bool InputLedgerIncomplete = false,
-    CaptureTransportWitness? TransportWitness = null);
+    CaptureTransportWitness? TransportWitness = null,
+    CaptureFirstKnownFailure? FirstKnownFailure = null,
+    CaptureVerificationBarrier? VerificationBarrier = null);
+
+/// <summary>
+/// The earliest known failure by an observed ingress ordinal. This is not
+/// a proof of first failure in the original client transport when entries
+/// or ordinals are missing. No raw document path or source is exposed.
+/// </summary>
+internal sealed record CaptureFirstKnownFailure(
+    string Reason, long? IngressSequence, int? Version, string EvidenceSource,
+    bool AllFailureOrdersKnown = false);
+
+/// <summary>
+/// Read-only fence over the ordered INPUT QUEUE only. Satisfied does not
+/// mean raw transport or source capture is complete or a durable producer
+/// has been sealed. Safe machine metadata only.
+/// </summary>
+internal sealed record CaptureVerificationBarrier(
+    string Status,
+    long? RequestIngressSequence,
+    long? LastSettledHighWatermark,
+    int OutstandingRegisteredInputs,
+    bool TransportToHandlerCompleteProven,
+    bool DurableProducerClosureProven);
 
 /// <summary>
 /// Privacy-safe, process-local count of document notification frames observed

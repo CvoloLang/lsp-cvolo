@@ -119,6 +119,9 @@ internal sealed class TestClient : IDisposable
     public Task<JObject> VerifyCaptureJournalAsync() =>
         _rpc.InvokeAsync<JObject>("cvolo/observability/verifyCaptureJournal.v1");
 
+    public Task<JObject> VerifyCaptureCheckpointAsync() =>
+        _rpc.InvokeAsync<JObject>("cvolo/observability/verifyCaptureCheckpoint.v1");
+
     public Task<JObject> GetCaptureConsentStatusAsync() =>
         _rpc.InvokeAsync<JObject>("cvolo/observability/captureConsentStatus.v1");
 
