@@ -222,7 +222,7 @@ internal static class ReproSourceBundle
         if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
             throw new IOException("reparse_point_export_directory");
         if (!OperatingSystem.IsWindows())
-            Directory.SetUnixFileMode(directory,
+            File.SetUnixFileMode(directory,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         ReproBundleBytes bundle = Build(data);
         string output = Path.Combine(directory,
