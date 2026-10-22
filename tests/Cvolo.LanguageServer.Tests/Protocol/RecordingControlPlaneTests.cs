@@ -473,6 +473,40 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Explicit_capture_journal_requires_lease_and_never_enables_disk_repro()
+    {
+        var (observer, _) = CreateObserver();
+        using var server = ProtocolSession.Start(observer: observer);
+        await server.Client.InitializeAsync();
+        string serverId = observer.Identity.ServerInstanceId;
+        JObject grant = await server.Client.GrantCaptureConsentAsync(
+            serverId, ["file:///C:/project/main.cvl"], true, false, 60);
+
+        JObject bad = await server.Client.ArmCaptureJournalAsync(serverId, "consent-wrong");
+        Assert.Equal("rejected", (string?)bad["status"]);
+        Assert.Equal("consent_lease_mismatch", (string?)bad["reason"]);
+
+        JObject armed = await server.Client.ArmCaptureJournalAsync(
+            serverId, (string)grant["leaseId"]!);
+        Assert.Equal("armed_in_memory", (string?)armed["status"]);
+        Assert.True((bool)armed["journalActive"]!);
+        Assert.False((bool)armed["sourceExportSupported"]!);
+        JObject status = await server.Client.GetCaptureConsentStatusAsync();
+        Assert.True((bool)status["journalActive"]!);
+        Assert.Equal(0, (int)status["capturedSnapshots"]!);
+        Assert.False((bool)status["sourceExportSupported"]!);
+
+        JObject notRepro = await server.Client.SetRecordingPolicyAsync("repro");
+        Assert.Equal("rejected", (string?)notRepro["status"]);
+        Assert.Equal("sensitive_capture_not_implemented", (string?)notRepro["reason"]);
+
+        await server.Client.RevokeCaptureConsentAsync(serverId);
+        JObject revoked = await server.Client.GetCaptureConsentStatusAsync();
+        Assert.False((bool)revoked["journalActive"]!);
+        Assert.Equal(0, (int)revoked["capturedSnapshots"]!);
+    }
+
+    [Fact]
     public async Task Noop_observer_cannot_report_a_successful_start()
     {
         using var session = ProtocolSession.Start();

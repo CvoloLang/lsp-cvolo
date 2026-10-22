@@ -61,6 +61,99 @@ public sealed class CaptureConsentStateTests
     }
 
     [Fact]
+    public void Journal_retains_only_scoped_versions_then_revoke_removes_source()
+    {
+        var state = new CaptureConsentState();
+        var granted = state.Grant(new CaptureConsentGrant
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            UserConfirmed = true, CaptureSources = true, TtlSeconds = 120,
+            DocumentUris = [Document],
+        }, ServerId);
+
+        Assert.Equal("armed_in_memory", state.Arm(new CaptureJournalArm
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            LeaseId = granted.LeaseId,
+        }, ServerId).Status);
+        state.CaptureCommitted(new Uri("file:///C:/project/unrelated.cvl"), 1, "not-consented");
+        state.CaptureCommitted(new Uri(Document), 1, "hello");
+        state.CaptureCommitted(new Uri(Document), 2, "hello world");
+        state.CaptureCommitted(new Uri(Document), 2, "ignored-duplicate");
+
+        var snapshots = state.CopyJournalForVerification();
+        Assert.Equal(2, snapshots.Count);
+        Assert.Equal("hello", snapshots[0].Text);
+        Assert.Equal("hello world", snapshots[1].Text);
+        Assert.Equal(2, state.Status().CapturedSnapshots);
+        Assert.Equal(16, state.Status().CapturedCharacters);
+        Assert.True(state.Status().JournalIncomplete);
+        Assert.True(state.Status().JournalActive);
+        Assert.False(state.Status().SourceExportSupported);
+
+        state.Revoke(new CaptureConsentRevoke
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+        }, ServerId);
+        Assert.Empty(state.CopyJournalForVerification());
+        Assert.False(state.Status().JournalActive);
+        Assert.Equal(0, state.Status().CapturedCharacters);
+        state.CaptureCommitted(new Uri(Document), 3, "after-revoke");
+        Assert.Empty(state.CopyJournalForVerification());
+    }
+
+    [Fact]
+    public void Journal_capacity_is_bounded_and_expiry_erases_retained_text()
+    {
+        DateTimeOffset now = new(2026, 10, 22, 10, 0, 0, TimeSpan.Zero);
+        var state = new CaptureConsentState(() => now);
+        var granted = state.Grant(new CaptureConsentGrant
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            UserConfirmed = true, CaptureSources = true, TtlSeconds = 10,
+            DocumentUris = [Document],
+        }, ServerId);
+        state.Arm(new CaptureJournalArm
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            LeaseId = granted.LeaseId,
+        }, ServerId);
+
+        state.CaptureCommitted(new Uri(Document), 1, new string('a', CaptureConsentState.MaxSnapshotChars + 1));
+        Assert.Empty(state.CopyJournalForVerification());
+        Assert.True(state.Status().JournalIncomplete);
+        state.CaptureCommitted(new Uri(Document), 2, "ok");
+        Assert.Single(state.CopyJournalForVerification());
+
+        now = now.AddSeconds(11);
+        Assert.Empty(state.CopyJournalForVerification());
+        Assert.False(state.Status().JournalActive);
+        Assert.Equal("expired", state.Status().Status);
+        state.CaptureCommitted(new Uri(Document), 3, "after-expiry");
+        Assert.Empty(state.CopyJournalForVerification());
+    }
+
+    [Fact]
+    public void Journal_cannot_be_armed_without_matching_lease_and_source_permission()
+    {
+        var state = new CaptureConsentState();
+        var grant = state.Grant(new CaptureConsentGrant
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            UserConfirmed = true, CapturePaths = true, TtlSeconds = 60,
+            DocumentUris = [Document],
+        }, ServerId);
+        var request = new CaptureJournalArm
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+            LeaseId = grant.LeaseId,
+        };
+        Assert.Equal("source_permission_required", state.Arm(request, ServerId).Reason);
+        state.CaptureCommitted(new Uri(Document), 1, "should-not-be-captured");
+        Assert.Empty(state.CopyJournalForVerification());
+    }
+
+    [Fact]
     public void Revoke_is_idempotent_and_clears_source_and_path_scope()
     {
         var state = new CaptureConsentState();

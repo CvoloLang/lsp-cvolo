@@ -110,6 +110,12 @@ internal sealed class TestClient : IDisposable
             "cvolo/observability/revokeCaptureConsent.v1",
             new { protocolVersion, serverInstanceId });
 
+    public Task<JObject> ArmCaptureJournalAsync(
+        string serverInstanceId, string leaseId, int protocolVersion = 1) =>
+        _rpc.InvokeWithParameterObjectAsync<JObject>(
+            "cvolo/observability/armCaptureJournal.v1",
+            new { protocolVersion, serverInstanceId, leaseId });
+
     public Task<JObject> GetCaptureConsentStatusAsync() =>
         _rpc.InvokeAsync<JObject>("cvolo/observability/captureConsentStatus.v1");
 

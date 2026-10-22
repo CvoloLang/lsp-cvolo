@@ -31,7 +31,8 @@ internal sealed class TextDocumentSyncHandler(
     Func<DocumentStore> storeAccessor,
     Action? onProjectChanged = null,
     Func<OrderedInputQueue?>? inputQueueAccessor = null,
-    ICompilerObserver? observer = null) : IDisposable
+    ICompilerObserver? observer = null,
+    Action<Uri, int, string>? onAppliedDocument = null) : IDisposable
 {
     private const string CvoloLanguageId = "cvolo";
 
@@ -136,11 +137,16 @@ internal sealed class TextDocumentSyncHandler(
             logger.Debug($"didOpen for '{documentUri}' reports languageId '{item.LanguageId}' (expected '{CvoloLanguageId}').");
         }
 
-        if (Store.Open(documentUri, item.LanguageId, item.Version, item.Text) is null)
+        var opened = Store.Open(documentUri, item.LanguageId, item.Version, item.Text);
+        if (opened is null)
         {
             logger.Warning($"[diag] didOpen for '{documentUri}' was rejected; diagnostics not scheduled.");
             return Rejected(DidOpenEvent, "document_store_rejected", item.Version);
         }
+        // The journal is optional; even a faulty diagnostic sink must never
+        // change document semantics or block a successful editor update.
+        try { onAppliedDocument?.Invoke(item.Uri, opened.Version.Value, opened.Text); }
+        catch (Exception) { }
         LogTiming("didOpen/store", stopwatch, documentUri, 100);
 
         if (!Store.TryGetProject(documentUri, out BackendProject? project))
@@ -186,11 +192,14 @@ internal sealed class TextDocumentSyncHandler(
             changes.Add(new DocumentChange(range, change.Text ?? string.Empty));
         }
 
-        if (Store.ApplyChanges(documentUri, textDocument.Version, changes) is null)
+        var changed = Store.ApplyChanges(documentUri, textDocument.Version, changes);
+        if (changed is null)
         {
             logger.Debug($"[diag] didChange for '{documentUri}' v{textDocument.Version} was not applied; diagnostics not scheduled.");
             return Rejected(DidChangeRejectedEvent, "store_not_applied", textDocument.Version);
         }
+        try { onAppliedDocument?.Invoke(textDocument.Uri, changed.Version.Value, changed.Text); }
+        catch (Exception) { }
         LogTiming("didChange/store", stopwatch, documentUri);
 
         if (!Store.TryGetProject(documentUri, out BackendProject? project))

@@ -174,7 +174,8 @@ internal sealed class LanguageServer(
             () => Store,
             null,
             () => Ingress?.Inputs,
-            Observer));
+            Observer,
+            (uri, version, text) => RecordingControl.CaptureCommittedDocument(uri, version, text)));
 
     /// <summary>
     /// Session-scoped, bounded store of completion-resolve entries guarding opaque data tokens.
@@ -458,6 +459,9 @@ internal sealed class LanguageServer(
                         grantCaptureConsent = RecordingControlPlane.GrantConsentMethod,
                         revokeCaptureConsent = RecordingControlPlane.RevokeConsentMethod,
                         getCaptureConsentStatus = RecordingControlPlane.ConsentStatusMethod,
+                        armCaptureJournal = RecordingControlPlane.ArmJournalMethod,
+                        inMemoryCaptureJournalSupported = true,
+                        sourceExportSupported = false,
                         capturePipelineSupported = false,
                         supportedModes = new[] { "off", "basic", "detailed" },
                         captureSourcesSupported = false,
@@ -543,6 +547,11 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.ConsentStatusMethod)]
     public CaptureConsentStatus GetCaptureConsentStatus()
         => RecordingControl.GetCaptureConsentStatus();
+
+    /// <summary>Arm the explicitly consented, bounded, RAM-only replay journal.</summary>
+    [JsonRpcMethod(RecordingControlPlane.ArmJournalMethod, UseSingleObjectParameterDeserialization = true)]
+    public CaptureJournalAck ArmCaptureJournal(CaptureJournalArm? request)
+        => RecordingControl.ArmCaptureJournal(request, _state.InitializeReceived);
 
     /// <summary>
     /// Applies an explicit mode request and returns the server-owned epoch.
