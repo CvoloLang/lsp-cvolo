@@ -97,6 +97,11 @@ internal sealed class TestClient : IDisposable
     public Task<JObject> GetRecordingCheckpointAsync() =>
         _rpc.InvokeAsync<JObject>("cvolo/observability/checkpoint.v1");
 
+    public Task<JObject> AddDiagnosticMarkerAsync(string category, int protocolVersion = 1) =>
+        _rpc.InvokeWithParameterObjectAsync<JObject>(
+            "cvolo/observability/addMarker.v1",
+            new { protocolVersion, category });
+
     public Task<JObject> ExportRecordingAsync(
         string serverInstanceId, long expectedEpoch, int protocolVersion = 1) =>
         _rpc.InvokeWithParameterObjectAsync<JObject>(

@@ -50,7 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: IgorShaposhnikov/Cvolo
-          ref: 5a111c12e7ec9aa7d37bc9eed1fbff19ecb2e204
+          ref: 43f07cc3981d8254571d278a63f83c683065d708
           path: .dev-compiler
           persist-credentials: false
 
@@ -60,7 +60,7 @@ jobs:
         run: >
           ./build/use-development-tooling.ps1
           -CompilerSource ".dev-compiler"
-          -ExpectedCommit "5a111c12e7ec9aa7d37bc9eed1fbff19ecb2e204"
+          -ExpectedCommit "43f07cc3981d8254571d278a63f83c683065d708"
 
       - name: Fetch pinned release Tooling
         if: "!startsWith(github.ref, 'refs/heads/develop/') && !startsWith(github.base_ref, 'develop/')"

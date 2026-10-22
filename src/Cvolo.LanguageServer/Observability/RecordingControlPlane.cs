@@ -15,6 +15,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string StatusMethod = "cvolo/observability/status.v1";
     internal const string CheckpointMethod = "cvolo/observability/checkpoint.v1";
     internal const string ExportMethod = "cvolo/observability/export.v1";
+    internal const string MarkerMethod = "cvolo/observability/addMarker.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
@@ -177,6 +178,50 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
             {
                 return Reject("archive_io_failed");
             }
+        }
+    }
+
+    /// <summary>
+    /// P0 marker for a user-observed incident. The category is a fixed machine
+    /// word: no free-form note, source, file URI or cursor content is recorded.
+    /// ACK means best-effort enqueue, NOT an fsync or a guarantee against loss.
+    /// </summary>
+    internal RecordingMarkerAck AddMarker(RecordingMarkerRequest? request, bool initialized)
+    {
+        lock (_gate)
+        {
+            RecordingMarkerAck Reject(string reason) => new(
+                Version, "rejected", reason, null,
+                _runtime?.Identity.RecordingEpoch ?? 0, false);
+
+            if (!initialized)
+                return Reject("server_not_initialized");
+            if (request is null || request.ProtocolVersion != Version)
+                return Reject("unsupported_protocol_version");
+            if (_runtime is null)
+                return Reject("observer_unavailable");
+            if (_runtime.Mode == ObservabilityMode.Off)
+                return Reject("recording_off");
+
+            string? category = request.Category;
+            if (category is not ("definition" or "completion" or "highlighting"
+                or "diagnostics" or "performance" or "other"))
+                return Reject("unsupported_category");
+
+            string markerId = "marker-" + Guid.NewGuid().ToString("N");
+            long epoch = _runtime.Identity.RecordingEpoch;
+            _runtime.EmitLifecycle(new CompilerEvent
+            {
+                Event = "diagnostic.marker",
+                Kind = CompilerEventKind.Lifecycle,
+                Detail = DiagnosticDetail.L0,
+                Priority = EventPriority.P0,
+                Outcome = "added",
+                ClientActionId = markerId,
+                Attributes = [new("category", category)],
+            });
+            return new RecordingMarkerAck(
+                Version, "queued_best_effort", null, markerId, epoch, false);
         }
     }
 
@@ -354,3 +399,17 @@ internal sealed record RecordingExportAck(
     string? ManifestSha256,
     bool ReplayIncomplete,
     bool CompletenessVerified);
+
+internal sealed class RecordingMarkerRequest
+{
+    public int ProtocolVersion { get; set; }
+    public string? Category { get; set; }
+}
+
+internal sealed record RecordingMarkerAck(
+    int ProtocolVersion,
+    string Status,
+    string? Reason,
+    string? MarkerId,
+    long RecordingEpoch,
+    bool Durable);

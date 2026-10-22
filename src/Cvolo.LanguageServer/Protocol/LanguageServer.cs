@@ -454,6 +454,7 @@ internal sealed class LanguageServer(
                         getStatus = RecordingControlPlane.StatusMethod,
                         getCheckpoint = RecordingControlPlane.CheckpointMethod,
                         export = RecordingControlPlane.ExportMethod,
+                        addMarker = RecordingControlPlane.MarkerMethod,
                         supportedModes = new[] { "off", "basic", "detailed" },
                         captureSourcesSupported = false,
                         exportSupported = recordingSession?.SupportsBundleExport == true,
@@ -519,6 +520,11 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.ExportMethod, UseSingleObjectParameterDeserialization = true)]
     public RecordingExportAck ExportRecording(RecordingExportRequest? request)
         => RecordingControl.Export(request, _state.InitializeReceived);
+
+    /// <summary>Queue an explicit P0 incident marker with no private payload.</summary>
+    [JsonRpcMethod(RecordingControlPlane.MarkerMethod, UseSingleObjectParameterDeserialization = true)]
+    public RecordingMarkerAck AddDiagnosticMarker(RecordingMarkerRequest? request)
+        => RecordingControl.AddMarker(request, _state.InitializeReceived);
 
     /// <summary>
     /// Applies an explicit mode request and returns the server-owned epoch.

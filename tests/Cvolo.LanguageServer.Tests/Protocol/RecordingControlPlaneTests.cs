@@ -382,6 +382,48 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task User_marker_has_a_unique_id_and_only_a_bounded_machine_category()
+    {
+        var (observer, queue) = CreateObserver();
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync();
+
+        JObject disabled = await session.Client.AddDiagnosticMarkerAsync("definition");
+        Assert.Equal("rejected", (string?)disabled["status"]);
+        Assert.Equal("recording_off", (string?)disabled["reason"]);
+
+        JObject started = await session.Client.SetRecordingPolicyAsync("detailed");
+        Assert.Equal("applied", (string?)started["status"]);
+        var before = new List<StampedEvent>();
+        queue.DrainAll(before);
+
+        JObject bad = await session.Client.AddDiagnosticMarkerAsync("source:secret-path");
+        Assert.Equal("rejected", (string?)bad["status"]);
+        Assert.Equal("unsupported_category", (string?)bad["reason"]);
+
+        JObject first = await session.Client.AddDiagnosticMarkerAsync("definition");
+        JObject second = await session.Client.AddDiagnosticMarkerAsync("completion");
+        Assert.Equal("queued_best_effort", (string?)first["status"]);
+        Assert.Equal("queued_best_effort", (string?)second["status"]);
+        Assert.False((bool)first["durable"]!);
+        Assert.Equal((long)started["recordingEpoch"]!, (long)first["recordingEpoch"]!);
+        Assert.NotEqual((string?)first["markerId"], (string?)second["markerId"]);
+
+        var recorded = new List<StampedEvent>();
+        queue.DrainAll(recorded);
+        var markers = recorded.Where(x => x.Event.Event == "diagnostic.marker").ToArray();
+        Assert.Equal(2, markers.Length);
+        Assert.Equal((string?)first["markerId"], markers[0].Event.ClientActionId);
+        Assert.Equal("added", markers[0].Event.Outcome);
+        Assert.Equal(EventPriority.P0, markers[0].Event.Priority);
+        Assert.Equal("definition", Assert.Single(markers[0].Event.Attributes!).Value);
+        Assert.Equal("completion", Assert.Single(markers[1].Event.Attributes!).Value);
+        Assert.All(markers, marker => Assert.Equal(0, observer.Catalog!.Validate(marker.Event).Count));
+        Assert.Equal(0, observer.Catalog!.UnknownEvents);
+        Assert.Equal(0, observer.Catalog.MissingFields);
+    }
+
+    [Fact]
     public async Task Noop_observer_cannot_report_a_successful_start()
     {
         using var session = ProtocolSession.Start();
