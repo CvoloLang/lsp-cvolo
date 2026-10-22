@@ -540,7 +540,7 @@ public sealed class CaptureConsentStateTests
     }
 
     [Fact]
-    public void Missing_ingress_makes_first_known_failure_order_uncertain()
+    public void First_known_failure_preserves_order_when_sole_violation_has_ingress()
     {
         var state = ArmedJournal();
         state.CaptureCommitted(new Uri(Document), 1, "abc", isDidOpen: true);
