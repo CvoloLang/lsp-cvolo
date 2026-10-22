@@ -474,6 +474,7 @@ internal sealed class LanguageServer(
                         getCaptureConsentStatus = RecordingControlPlane.ConsentStatusMethod,
                         armCaptureJournal = RecordingControlPlane.ArmJournalMethod,
                         sealCaptureJournal = RecordingControlPlane.SealJournalMethod,
+                        exportSourceRepro = RecordingControlPlane.ExportSourceMethod,
                         verifyCaptureJournal = RecordingControlPlane.VerifyJournalMethod,
                         verifyCaptureCheckpoint = RecordingControlPlane.VerifyCheckpointMethod,
                         flightRecorderSnapshot = RecordingControlPlane.FlightSnapshotMethod,
@@ -600,6 +601,17 @@ internal sealed class LanguageServer(
         return RecordingControl.SealCaptureJournal(request, _state.InitializeReceived)
             with { RegisteredInputBarrier = "satisfied" };
     }
+
+    /// <summary>
+    /// Explicit, separate confirmation is required before writing sources.
+    /// No caller-controlled output path or network transport is accepted.
+    /// </summary>
+    [JsonRpcMethod(RecordingControlPlane.ExportSourceMethod,
+        UseSingleObjectParameterDeserialization = true)]
+    public Task<ReproExportAck> ExportSourceReproAsync(
+        ReproExportRequest? request, CancellationToken cancellationToken)
+        => RecordingControl.ExportPrivateReproAsync(request,
+            _state.InitializeReceived, cancellationToken);
 
     [JsonRpcMethod(RecordingControlPlane.VerifyJournalMethod)]
     public CaptureReplayEvidence VerifyCaptureJournal()

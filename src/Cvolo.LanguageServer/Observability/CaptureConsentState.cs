@@ -453,6 +453,60 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         }
     }
 
+    /// <summary>
+    /// The user must reconfirm disclosure at export. No file I/O occurs under
+    /// this lock. A revoked or expired lease is never allowed to publish later.
+    /// </summary>
+    internal bool TryPrepareSourceExport(
+        ReproExportRequest? request, string? serverInstanceId,
+        out CaptureExportSnapshot? snapshot, out string? reason)
+    {
+        lock (_gate)
+        {
+            ExpireIfNeeded();
+            snapshot = null;
+            if (request?.ProtocolVersion != Version)
+                reason = "unsupported_protocol_version";
+            else if (string.IsNullOrEmpty(serverInstanceId)
+                || request.ServerInstanceId != serverInstanceId)
+                reason = "server_instance_mismatch";
+            else if (!request.ExplicitUserConfirmation)
+                reason = "explicit_export_confirmation_required";
+            else if (_leaseId is null || _documents is null)
+                reason = "consent_not_active";
+            else if (_leaseId != request.LeaseId)
+                reason = "consent_lease_mismatch";
+            else if (!_allowSources || !_journalSealed)
+                reason = "sealed_source_journal_required";
+            else
+            {
+                snapshot = new CaptureExportSnapshot(_leaseId, _journal.ToArray(),
+                    InspectReplay());
+                reason = null;
+                return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The final rename is serialized against revoke/regrant. Only a bounded,
+    /// already-written temporary file is renamed inside this private lock.
+    /// Previously exported archives are not erased on revoke.
+    /// </summary>
+    internal bool CommitExport(string leaseId, Action publish)
+    {
+        lock (_gate)
+        {
+            ExpireIfNeeded();
+            if (_leaseId != leaseId || !_journalSealed || !_allowSources
+                || _documents is null)
+                return false;
+            publish();
+            return true;
+        }
+    }
+
     internal IReadOnlyList<CapturedDocumentSnapshot> CopyJournalForVerification()
     {
         lock (_gate)

@@ -534,6 +534,43 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Private_repro_export_requires_second_confirmation_and_publishes_integrity_manifest()
+    {
+        var (observer, _) = CreateObserver();
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync();
+        string serverId = observer.Identity.ServerInstanceId;
+        string documentUri = "file:///C:/project/private-archive.cvl";
+        JObject granted = await session.Client.GrantCaptureConsentAsync(
+            serverId, [documentUri], true, false, 60);
+        string lease = (string)granted["leaseId"]!;
+        await session.Client.ArmCaptureJournalAsync(serverId, lease);
+        await session.Client.NotifyDidOpenAsync(new Uri(documentUri), "cvolo", 1, "SECRET_REPRO_CONTENT");
+        await session.Client.DrainNotificationsAsync();
+        await session.Client.SealCaptureJournalAsync(serverId, lease);
+        JObject denied = await session.Client.ExportSourceReproAsync(serverId, lease);
+        Assert.Equal("explicit_export_confirmation_required", (string?)denied["reason"]);
+        JObject ack = await session.Client.ExportSourceReproAsync(serverId, lease, true);
+        Assert.Equal("exported_private_source_bundle", (string?)ack["status"]);
+        Assert.True((bool)ack["localFileCreated"]!);
+        Assert.False((bool)ack["crashDurabilityGuaranteed"]!);
+        string path = (string)ack["bundlePath"]!;
+        try
+        {
+            Assert.True(File.Exists(path));
+            byte[] bytes = await File.ReadAllBytesAsync(path);
+            var verified = ReproSourceBundle.Verify(bytes, (string)ack["manifestSha256"]!);
+            Assert.True(verified.IntegrityValid, verified.Reason);
+            Assert.True(verified.VerifiedSources >= 1);
+            using var zip = new System.IO.Compression.ZipArchive(new MemoryStream(bytes),
+                System.IO.Compression.ZipArchiveMode.Read);
+            Assert.DoesNotContain("private-archive.cvl", (string)ack["manifestSha256"]!);
+            Assert.NotNull(zip.GetEntry("repro-manifest.json"));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public async Task Seal_journal_RPC_exposes_only_verified_internal_closure()
     {
         var (observer, _) = CreateObserver();

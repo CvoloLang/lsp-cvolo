@@ -21,6 +21,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string ConsentStatusMethod = "cvolo/observability/captureConsentStatus.v1";
     internal const string ArmJournalMethod = "cvolo/observability/armCaptureJournal.v1";
     internal const string SealJournalMethod = "cvolo/observability/sealCaptureJournal.v1";
+    internal const string ExportSourceMethod = "cvolo/observability/exportSourceRepro.v1";
     internal const string VerifyJournalMethod = "cvolo/observability/verifyCaptureJournal.v1";
     internal const string VerifyCheckpointMethod = "cvolo/observability/verifyCaptureCheckpoint.v1";
     internal const string FlightSnapshotMethod = "cvolo/observability/flightRecorderSnapshot.v1";
@@ -332,6 +333,31 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
 
     internal CaptureReplayEvidence VerifyCaptureJournal()
         => _captureConsent.InspectReplay();
+
+    internal Task<ReproExportAck> ExportPrivateReproAsync(
+        ReproExportRequest? request, bool initialized,
+        CancellationToken cancellationToken)
+    {
+        if (!initialized || _runtime is null)
+            return Task.FromResult(new ReproExportAck(Version, "rejected",
+                !initialized ? "server_not_initialized" : "observer_unavailable",
+                null, null, 0, 0, false, false));
+        if (!_captureConsent.TryPrepareSourceExport(request,
+                _runtime.Identity.ServerInstanceId, out var snapshot, out var reason)
+            || snapshot is null)
+            return Task.FromResult(new ReproExportAck(Version, "rejected", reason,
+                null, null, 0, 0, false, false));
+        return Task.Run(() =>
+        {
+            try { return ReproSourceBundle.Store(_captureConsent, snapshot); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException
+                or InvalidDataException or ArgumentException or System.Security.SecurityException)
+            {
+                return new ReproExportAck(Version, "rejected", "local_export_failed",
+                    null, null, 0, 0, false, false);
+            }
+        }, cancellationToken);
+    }
 
     internal RecordingPolicyAck Apply(RecordingPolicyRequest? request, bool initialized)
     {

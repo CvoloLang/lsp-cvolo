@@ -122,6 +122,12 @@ internal sealed class TestClient : IDisposable
             "cvolo/observability/sealCaptureJournal.v1",
             new { protocolVersion, serverInstanceId, leaseId });
 
+    public Task<JObject> ExportSourceReproAsync(string serverInstanceId,
+        string leaseId, bool explicitUserConfirmation = false, int protocolVersion = 1) =>
+        _rpc.InvokeWithParameterObjectAsync<JObject>(
+            "cvolo/observability/exportSourceRepro.v1",
+            new { protocolVersion, serverInstanceId, leaseId, explicitUserConfirmation });
+
     public Task<JObject> VerifyCaptureJournalAsync() =>
         _rpc.InvokeAsync<JObject>("cvolo/observability/verifyCaptureJournal.v1");
 
