@@ -66,7 +66,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 CapturedCharacters: _journalChars,
                 JournalIncomplete: _journalIncomplete,
                 InMemoryJournalSupported: true,
-                SourceExportSupported: false,
+                SourceExportSupported: true,
                 CapturedInputOutcomes: _inputLedger.Count,
                 InputLedgerIncomplete: _inputLedgerIncomplete,
                 HandlerEntries: _handlerEntries.Count,
@@ -193,7 +193,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 _journalArmed = true;
             }
             return new(Version, "armed_in_memory", null, true, _journal.Count,
-                _journalChars, _journalIncomplete, false);
+                _journalChars, _journalIncomplete, true);
         }
     }
 
