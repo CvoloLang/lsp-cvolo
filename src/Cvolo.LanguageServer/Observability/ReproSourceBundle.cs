@@ -133,6 +133,10 @@ internal static class ReproSourceBundle
                 || manifest.Snapshots is null
                 || manifest.Snapshots.Count > CaptureConsentState.MaxJournalSnapshots)
                 return new(false, "unsupported_or_invalid_manifest", 0, false);
+            if (manifestBytes.Length > 512 * 1024
+                || zip.Entries.Any(e => e.FullName != "repro-manifest.json"
+                    && !manifest.Snapshots.Any(s => s.SourceEntry == e.FullName)))
+                return new(false, "unexpected_archive_member", 0, false);
             var used = new HashSet<string>(StringComparer.Ordinal);
             var lastByDocument = new Dictionary<string, string>(StringComparer.Ordinal);
             int verified = 0;
