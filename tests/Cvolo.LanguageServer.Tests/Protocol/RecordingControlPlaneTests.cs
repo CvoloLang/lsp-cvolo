@@ -1,4 +1,7 @@
 using Cvolo.LanguageServer.Tests.TestSupport;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
 using Cvolo.LanguageServer.Observability;
 using Cvolo.Observability;
 using Cvolo.Observability.Abstractions;
@@ -169,7 +172,59 @@ public sealed class RecordingControlPlaneTests
             Assert.Equal(0, (long)checkpoint["droppedP1"]!);
             Assert.Equal(0, (long)checkpoint["droppedP2"]!);
             Assert.Equal(0, (long)checkpoint["writerLost"]!);
-            Assert.False((bool)checkpoint["exportSupported"]!);
+            Assert.True((bool)checkpoint["exportSupported"]!);
+
+            JObject archive = await server.Client.ExportRecordingAsync(
+                (string)checkpoint["serverInstanceId"]!, (long)checkpoint["recordingEpoch"]!);
+            Assert.Equal("exported", (string?)archive["status"]);
+            Assert.True((int)archive["segmentCount"]! >= 1);
+            Assert.False((bool)archive["completenessVerified"]!);
+            string archivePath = (string)archive["archivePath"]!;
+            Assert.True(File.Exists(archivePath));
+
+            // Independently verify that the manifest hashes the exact
+            // uncompressed data actually packaged, not merely the live log.
+            using (var zip = ZipFile.OpenRead(archivePath))
+            {
+                var manifestEntry = Assert.Single(zip.Entries, x => x.FullName == "manifest.json");
+                byte[] manifestBytes;
+                using (Stream input = manifestEntry.Open())
+                using (var buffer = new MemoryStream())
+                {
+                    input.CopyTo(buffer);
+                    manifestBytes = buffer.ToArray();
+                }
+                Assert.Equal(
+                    Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant(),
+                    (string?)archive["manifestSha256"]);
+                var manifest = JObject.Parse(Encoding.UTF8.GetString(manifestBytes));
+                Assert.Equal("cvolo.diagnostic-bundle", (string?)manifest["format"]);
+                Assert.False((bool)manifest["completenessVerified"]!);
+                Assert.False((bool)manifest["privacyAuditVerified"]!);
+                Assert.Equal((long)checkpoint["recordingEpoch"]!,
+                    (long)manifest["checkpoint"]!["recordingEpoch"]!);
+
+                var segmentList = (JArray)manifest["segments"]!;
+                Assert.Equal((int)archive["segmentCount"]!, segmentList.Count);
+                foreach (var segment in segmentList)
+                {
+                    string entryName = (string)segment["entry"]!;
+                    Assert.StartsWith("events/segment-", entryName);
+                    var logEntry = Assert.Single(zip.Entries, e => e.FullName == entryName);
+                    using Stream data = logEntry.Open();
+                    using var bytes = new MemoryStream();
+                    data.CopyTo(bytes);
+                    Assert.Equal((long)segment["sizeBytes"]!, bytes.Length);
+                    Assert.Equal(
+                        (string?)segment["sha256"],
+                        Convert.ToHexString(SHA256.HashData(bytes.ToArray())).ToLowerInvariant());
+                }
+            }
+
+            JObject duplicate = await server.Client.ExportRecordingAsync(
+                (string)checkpoint["serverInstanceId"]!, (long)checkpoint["recordingEpoch"]! + 1);
+            Assert.Equal("rejected", (string?)duplicate["status"]);
+            Assert.Equal("recording_epoch_mismatch", (string?)duplicate["reason"]);
             Assert.True(checkpoint["producerBarrierSequence"] is null or { Type: JTokenType.Null });
 
             string jsonl = File.ReadAllText(file);
@@ -208,6 +263,55 @@ public sealed class RecordingControlPlaneTests
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task Export_is_rejected_while_recording_is_active_or_has_no_disk_sink()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "cvolo-archive-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var recording = LspObservabilitySession.StartForTesting(
+                Path.Combine(directory, "trace.jsonl"));
+            using var server = ProtocolSession.Start(
+                observer: recording.Observer, recordingSession: recording);
+            await server.Client.InitializeAsync();
+
+            JObject before = await server.Client.GetRecordingCheckpointAsync();
+            JObject beforeExport = await server.Client.ExportRecordingAsync(
+                (string)before["serverInstanceId"]!, (long)before["recordingEpoch"]!);
+            Assert.Equal("rejected", (string?)beforeExport["status"]);
+            Assert.Equal("writer_not_closed", (string?)beforeExport["reason"]);
+
+            JObject start = await server.Client.SetRecordingPolicyAsync("detailed");
+            Assert.Equal("applied", (string?)start["status"]);
+            JObject during = await server.Client.GetRecordingCheckpointAsync();
+            JObject unsafeExport = await server.Client.ExportRecordingAsync(
+                (string)during["serverInstanceId"]!, (long)during["recordingEpoch"]!);
+            Assert.Equal("rejected", (string?)unsafeExport["status"]);
+            Assert.Equal("recording_active", (string?)unsafeExport["reason"]);
+
+            JObject wrongSession = await server.Client.ExportRecordingAsync(
+                "wrong-server-instance", (long)during["recordingEpoch"]!);
+            Assert.Equal("rejected", (string?)wrongSession["status"]);
+            Assert.Equal("server_instance_mismatch", (string?)wrongSession["reason"]);
+
+            Assert.Empty(Directory.GetFiles(directory, "*.zip"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+
+        var (observer, _) = CreateObserver();
+        using var collector = ProtocolSession.Start(observer: observer);
+        await collector.Client.InitializeAsync();
+        JObject status = await collector.Client.GetRecordingCheckpointAsync();
+        JObject rejected = await collector.Client.ExportRecordingAsync(
+            (string)status["serverInstanceId"]!, (long)status["recordingEpoch"]!);
+        Assert.Equal("rejected", (string?)rejected["status"]);
+        Assert.Equal("no_disk_sink", (string?)rejected["reason"]);
     }
 
     [Fact]

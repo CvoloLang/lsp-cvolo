@@ -453,9 +453,10 @@ internal sealed class LanguageServer(
                         setRecording = RecordingControlPlane.SetMethod,
                         getStatus = RecordingControlPlane.StatusMethod,
                         getCheckpoint = RecordingControlPlane.CheckpointMethod,
+                        export = RecordingControlPlane.ExportMethod,
                         supportedModes = new[] { "off", "basic", "detailed" },
                         captureSourcesSupported = false,
-                        exportSupported = false,
+                        exportSupported = recordingSession?.SupportsBundleExport == true,
                     } : null,
                 },
             },
@@ -513,6 +514,11 @@ internal sealed class LanguageServer(
     /// <summary>Read-only checkpoint: no file capture and no export side effect.</summary>
     [JsonRpcMethod(RecordingControlPlane.CheckpointMethod)]
     public RecordingCheckpoint GetRecordingCheckpoint() => RecordingControl.GetCheckpoint();
+
+    /// <summary>Export only the closed recording tied to the requested epoch.</summary>
+    [JsonRpcMethod(RecordingControlPlane.ExportMethod, UseSingleObjectParameterDeserialization = true)]
+    public RecordingExportAck ExportRecording(RecordingExportRequest? request)
+        => RecordingControl.Export(request, _state.InitializeReceived);
 
     /// <summary>
     /// Applies an explicit mode request and returns the server-owned epoch.

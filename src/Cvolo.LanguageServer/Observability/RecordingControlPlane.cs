@@ -14,6 +14,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string SetMethod = "cvolo/observability/setRecording.v1";
     internal const string StatusMethod = "cvolo/observability/status.v1";
     internal const string CheckpointMethod = "cvolo/observability/checkpoint.v1";
+    internal const string ExportMethod = "cvolo/observability/export.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
@@ -119,7 +120,63 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
                 // Producer sequence barrier, integrity validation, durable
                 // fsync and export packaging are deliberately not implemented.
                 ProducerBarrierSequence: null,
-                ExportSupported: false);
+                ExportSupported: _session?.SupportsBundleExport == true);
+        }
+    }
+
+    /// <summary>
+    /// Explicit user-triggered export of a stopped recording. A client-supplied
+    /// server identity and epoch guard against packaging the wrong session.
+    /// The destination path is chosen by the server, never by a JSON-RPC input.
+    /// </summary>
+    internal RecordingExportAck Export(RecordingExportRequest? request, bool initialized)
+    {
+        lock (_gate)
+        {
+            RecordingCheckpoint checkpoint = GetCheckpoint();
+            RecordingExportAck Reject(string reason) => new(
+                Version, "rejected", reason,
+                checkpoint.RecordingEpoch, null, 0, 0, null,
+                checkpoint.ReplayIncomplete, false);
+
+            if (!initialized)
+                return Reject("server_not_initialized");
+            if (request is null || request.ProtocolVersion != Version)
+                return Reject("unsupported_protocol_version");
+            if (_runtime is null)
+                return Reject("observer_unavailable");
+            if (_session is null || !_session.SupportsBundleExport)
+                return Reject("no_disk_sink");
+            if (!string.Equals(request.ServerInstanceId,
+                    checkpoint.ServerInstanceId, StringComparison.Ordinal))
+                return Reject("server_instance_mismatch");
+            if (request.ExpectedEpoch != checkpoint.RecordingEpoch)
+                return Reject("recording_epoch_mismatch");
+            if (checkpoint.EffectiveMode != "off")
+                return Reject("recording_active");
+            if (!checkpoint.ClosedForInspection)
+                return Reject("writer_not_closed");
+
+            try
+            {
+                RecordingArchiveResult archive = _session.ExportClosedBundle(checkpoint);
+                return new RecordingExportAck(
+                    Version, "exported", null, checkpoint.RecordingEpoch,
+                    archive.Path, archive.SegmentCount,
+                    archive.TotalUncompressedBytes, archive.ManifestSha256,
+                    checkpoint.ReplayIncomplete, false);
+            }
+            catch (InvalidOperationException ex) when (ex.Message is
+                "recording_active" or "drain_in_progress" or "writer_not_closed" or
+                "events_pending" or "session_stopped" or "no_disk_sink")
+            {
+                return Reject(ex.Message);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                or System.Security.SecurityException or ArgumentException)
+            {
+                return Reject("archive_io_failed");
+            }
         }
     }
 
@@ -274,3 +331,26 @@ internal sealed record RecordingCheckpoint(
     long? LastDurableProducerSequence,
     long? ProducerBarrierSequence,
     bool ExportSupported);
+
+internal sealed class RecordingExportRequest
+{
+    public int ProtocolVersion { get; set; }
+    public string? ServerInstanceId { get; set; }
+    public long ExpectedEpoch { get; set; }
+}
+
+/// <summary>
+/// The manifest hashes archive members but does not certify replay
+/// completeness, source redaction or historical retention.
+/// </summary>
+internal sealed record RecordingExportAck(
+    int ProtocolVersion,
+    string Status,
+    string? Reason,
+    long RecordingEpoch,
+    string? ArchivePath,
+    int SegmentCount,
+    long TotalUncompressedBytes,
+    string? ManifestSha256,
+    bool ReplayIncomplete,
+    bool CompletenessVerified);

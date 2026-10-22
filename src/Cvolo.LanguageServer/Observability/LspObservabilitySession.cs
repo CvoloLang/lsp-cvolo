@@ -45,6 +45,37 @@ internal sealed class LspObservabilitySession : IDisposable
 
     internal CompilerObserver Observer { get; }
 
+    internal bool SupportsBundleExport => _options.OutputPath is not null;
+
+    /// <summary>
+    /// An explicit export request only succeeds after Stop released the writer.
+    /// Holding the session gate prevents another Start while source segments
+    /// are being snapshotted, hashed and packed into the bundle.
+    /// </summary>
+    internal RecordingArchiveResult ExportClosedBundle(RecordingCheckpoint checkpoint)
+    {
+        lock (_gate)
+        {
+            FinishCompletedDrainLocked();
+            if (_options.OutputPath is null)
+                throw new InvalidOperationException("no_disk_sink");
+            if (Observer.Mode != ObservabilityMode.Off)
+                throw new InvalidOperationException("recording_active");
+            if (_pendingDrain is not null)
+                throw new InvalidOperationException("drain_in_progress");
+            if (_writer is null || !_writerStopped)
+                throw new InvalidOperationException("writer_not_closed");
+            if (_queue.Count != 0)
+                throw new InvalidOperationException("events_pending");
+            if (Volatile.Read(ref _stopped) != 0)
+                throw new InvalidOperationException("session_stopped");
+
+            return RecordingBundleExporter.Write(
+                _options.OutputPath, checkpoint, _options.MaxRotatedFiles,
+                _options.MaxTotalSizeBytes);
+        }
+    }
+
     internal static LspObservabilitySession Start()
     {
         var mode = ParseMode(Environment.GetEnvironmentVariable(ModeEnvironmentVariable));
