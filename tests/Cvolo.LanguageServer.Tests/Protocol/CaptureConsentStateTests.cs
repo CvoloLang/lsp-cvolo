@@ -179,6 +179,10 @@ public sealed class CaptureConsentStateTests
         Assert.Equal("retained_snapshots_inspected", result.Status);
         Assert.False(result.ReplayComplete);
         Assert.True(result.HistoryPrefixUnknown);
+        Assert.Equal("unknown", result.TraceCompleteness);
+        Assert.Equal("partial", result.DocumentReplayCompleteness);
+        Assert.Equal("unknown", result.ProjectInputsCompleteness);
+        Assert.Equal("unknown", result.SemanticReplayCompleteness);
         Assert.Equal(2, result.CapturedSnapshots);
         Assert.Null(result.FirstObservedIssue);
         Assert.Equal("did_open", result.Snapshots[0].InputKind);
@@ -250,6 +254,7 @@ public sealed class CaptureConsentStateTests
         ]);
         var evidence = state.InspectReplay();
         Assert.Equal("replayed_text_mismatch", evidence.FirstObservedIssue);
+        Assert.Equal("partial", evidence.DocumentReplayCompleteness);
         Assert.Equal("replayed_text_mismatch", evidence.Snapshots[1].Issue);
         Assert.Equal("retained_snapshot_issues", evidence.Status);
         Assert.False(evidence.ReplayComplete);
