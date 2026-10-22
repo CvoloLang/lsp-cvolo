@@ -22,7 +22,9 @@ internal static class CaptureReplayVerifier
         IReadOnlyList<CapturedDocumentInput>? inputs = null,
         bool inputLedgerIncomplete = false,
         IReadOnlyList<CapturedDocumentHandlerEntry>? entered = null,
-        CaptureTransportWitness? transportWitness = null)
+        CaptureTransportWitness? transportWitness = null,
+        IReadOnlyList<CaptureAssignedIngress>? admissions = null,
+        bool admissionsOverflowed = false)
     {
         var perDocument = new Dictionary<string, DocumentEvidenceBuilder>(StringComparer.Ordinal);
         var entries = new List<CaptureSnapshotEvidence>(snapshots.Count);
@@ -126,6 +128,13 @@ internal static class CaptureReplayVerifier
         CaptureInputReconciliation reconciliation = CaptureInputReconciler.Reconcile(
             inputs ?? Array.Empty<CapturedDocumentInput>(), snapshots, entered);
         bool problems = firstIssue is not null || reconciliation.FirstIssue is not null;
+        var admissionList = admissions ?? Array.Empty<CaptureAssignedIngress>();
+        var knownIngress = admissionList.Select(a => a.Sequence).ToHashSet();
+        int matchedHandlers = entered?.Count(e => e.IngressSequence is > 0
+            && knownIngress.Contains(e.IngressSequence.Value)
+            && admissionList.Any(a => a.Sequence == e.IngressSequence && a.Kind == e.InputKind)) ?? 0;
+        int handlerWithoutIngressReceipt = entered?.Count(e => e.IngressSequence is > 0
+            && !admissionList.Any(a => a.Sequence == e.IngressSequence && a.Kind == e.InputKind)) ?? 0;
         // Compute the earliest KNOWN ingress violation across independent
         // snapshot and input ledgers. An unknown sequence cannot be ordered,
         // so the "all orders known" flag must remain false in that case.
@@ -178,7 +187,10 @@ internal static class CaptureReplayVerifier
             InputReconciliation: reconciliation,
             InputLedgerIncomplete: inputLedgerIncomplete,
             TransportWitness: transportWitness,
-            FirstKnownFailure: firstKnown);
+            FirstKnownFailure: firstKnown,
+            AdmissionCorrelation: new CaptureAdmissionCorrelation(admissionList.Count,
+                matchedHandlers, handlerWithoutIngressReceipt,
+                admissionsOverflowed, false));
     }
 
     private sealed class DocumentEvidenceBuilder(string id)
@@ -222,7 +234,15 @@ internal sealed record CaptureReplayEvidence(
     bool InputLedgerIncomplete = false,
     CaptureTransportWitness? TransportWitness = null,
     CaptureFirstKnownFailure? FirstKnownFailure = null,
-    CaptureVerificationBarrier? VerificationBarrier = null);
+    CaptureVerificationBarrier? VerificationBarrier = null,
+    CaptureAdmissionCorrelation? AdmissionCorrelation = null);
+
+internal sealed record CaptureAssignedIngress(long Sequence, string Kind);
+
+internal sealed record CaptureAdmissionCorrelation(
+    int AdmittedDocumentFrames, int MatchedHandlerEntries,
+    int HandlerEntriesWithoutAdmissionReceipt, bool Overflowed,
+    bool CompleteTransportHistoryProven);
 
 /// <summary>
 /// The earliest known failure by an observed ingress ordinal. This is not
