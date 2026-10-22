@@ -475,6 +475,9 @@ internal sealed class LanguageServer(
                         armCaptureJournal = RecordingControlPlane.ArmJournalMethod,
                         verifyCaptureJournal = RecordingControlPlane.VerifyJournalMethod,
                         verifyCaptureCheckpoint = RecordingControlPlane.VerifyCheckpointMethod,
+                        flightRecorderSnapshot = RecordingControlPlane.FlightSnapshotMethod,
+                        triggerFlightRecorder = RecordingControlPlane.FlightTriggerMethod,
+                        flightRecorderMetadataOnly = true,
                         inMemoryCaptureJournalSupported = true,
                         sourceExportSupported = false,
                         capturePipelineSupported = false,
@@ -571,6 +574,21 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.VerifyJournalMethod)]
     public CaptureReplayEvidence VerifyCaptureJournal()
         => RecordingControl.VerifyCaptureJournal();
+
+    /// <summary>
+    /// Inspect bounded volatile pretrigger metadata even when recording is off.
+    /// Neither raw source nor URI nor RPC parameters are exposed.
+    /// </summary>
+    [JsonRpcMethod(RecordingControlPlane.FlightSnapshotMethod)]
+    public FlightRecorderSnapshot GetFlightRecorderSnapshot()
+        => RecordingControl.InspectFlightRecorder();
+
+    /// <summary>Explicit incident marker, usable while normal recording is off.</summary>
+    [JsonRpcMethod(RecordingControlPlane.FlightTriggerMethod,
+        UseSingleObjectParameterDeserialization = true)]
+    public FlightRecorderTriggerAck TriggerFlightRecorder(
+        FlightRecorderTriggerRequest? request)
+        => RecordingControl.TriggerFlightRecorder(request, _state.InitializeReceived);
 
     /// <summary>
     /// Reads a checkpoint after earlier REGISTERED document input handlers

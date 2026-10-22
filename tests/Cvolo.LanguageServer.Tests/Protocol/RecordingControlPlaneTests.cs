@@ -551,6 +551,55 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Flight_recorder_tracks_pretrigger_frames_while_recording_is_off()
+    {
+        using var session = ProtocolSession.Start();
+        await session.Client.InitializeAsync();
+
+        await session.Client.NotifyDidChangeAsync(
+            new Uri("file:///C:/project/secret-document.cvl"), 2,
+            new Microsoft.VisualStudio.LanguageServer.Protocol.TextDocumentContentChangeEvent
+            {
+                Text = "SECRET_FLIGHT_SOURCE",
+            });
+        await session.Client.DrainNotificationsAsync();
+
+        JObject before = await session.Client.GetFlightRecorderSnapshotAsync();
+        Assert.Equal("untriggered", (string?)before["status"]);
+        Assert.False((bool)before["sourceContentCaptured"]!);
+        Assert.Contains((JArray)before["events"]!, e =>
+            (string?)e["kind"] == "did_change" &&
+            (string?)e["stage"] == "transport_read");
+
+        JObject marked = await session.Client.TriggerFlightRecorderAsync("diagnostics");
+        Assert.Equal("captured_in_memory", (string?)marked["status"]);
+        Assert.False((bool)marked["durablySaved"]!);
+
+        JObject after = await session.Client.GetFlightRecorderSnapshotAsync();
+        Assert.Equal((string?)marked["incidentId"], (string?)after["incidentId"]);
+        Assert.True((int)after["retainedPretriggerEvents"]! > 0);
+        Assert.True((bool)after["triggerRetained"]!);
+        Assert.False((bool)after["durableCheckpointAvailable"]!);
+        Assert.False((bool)after["transportToHandlerCorrelationProven"]!);
+        Assert.DoesNotContain("SECRET_FLIGHT_SOURCE", after.ToString());
+        Assert.DoesNotContain("secret-document.cvl", after.ToString());
+    }
+
+    [Fact]
+    public async Task Flight_trigger_is_validated_even_without_normal_recording()
+    {
+        using var session = ProtocolSession.Start();
+        await session.Client.InitializeAsync();
+        JObject invalid = await session.Client.TriggerFlightRecorderAsync("user-supplied-secret");
+        Assert.Equal("rejected", (string?)invalid["status"]);
+        Assert.Equal("unsupported_category", (string?)invalid["reason"]);
+        JObject wrongVersion = await session.Client.TriggerFlightRecorderAsync(
+            "other", protocolVersion: 4);
+        Assert.Equal("unsupported_protocol_version", (string?)wrongVersion["reason"]);
+        Assert.Null((string?)wrongVersion["incidentId"]);
+    }
+
+    [Fact]
     public async Task Noop_observer_cannot_report_a_successful_start()
     {
         using var session = ProtocolSession.Start();

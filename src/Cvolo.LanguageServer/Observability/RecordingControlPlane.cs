@@ -22,11 +22,20 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string ArmJournalMethod = "cvolo/observability/armCaptureJournal.v1";
     internal const string VerifyJournalMethod = "cvolo/observability/verifyCaptureJournal.v1";
     internal const string VerifyCheckpointMethod = "cvolo/observability/verifyCaptureCheckpoint.v1";
+    internal const string FlightSnapshotMethod = "cvolo/observability/flightRecorderSnapshot.v1";
+    internal const string FlightTriggerMethod = "cvolo/observability/triggerFlightRecorder.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
     private readonly object _gate = new();
     private readonly CaptureConsentState _captureConsent = new();
+    private readonly LspFlightRecorder _flightRecorder = new();
+
+    internal FlightRecorderSnapshot InspectFlightRecorder() => _flightRecorder.Inspect();
+
+    internal FlightRecorderTriggerAck TriggerFlightRecorder(
+        FlightRecorderTriggerRequest? request, bool initialized)
+        => _flightRecorder.Trigger(request, initialized);
 
     internal bool Supported => _runtime is not null;
 
@@ -286,14 +295,23 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
 
     internal void CaptureSettledDocumentInput(
         Uri? uri, string kind, string outcome, int? version, long? ingressSequence)
-        => _captureConsent.CaptureSettled(uri, kind, outcome, version, ingressSequence);
+    {
+        _flightRecorder.OnHandlerSettled(kind, outcome, ingressSequence);
+        _captureConsent.CaptureSettled(uri, kind, outcome, version, ingressSequence);
+    }
 
     internal void CaptureEnteredDocumentHandler(
         Uri? uri, string kind, int? version, long? ingressSequence)
-        => _captureConsent.CaptureHandlerEntered(uri, kind, version, ingressSequence);
+    {
+        _flightRecorder.OnHandlerEntered(kind, ingressSequence);
+        _captureConsent.CaptureHandlerEntered(uri, kind, version, ingressSequence);
+    }
 
     internal void ObserveTransportDocumentNotification(string method)
-        => _captureConsent.CaptureTransportNotification(method);
+    {
+        _flightRecorder.OnTransportNotification(method);
+        _captureConsent.CaptureTransportNotification(method);
+    }
 
     internal CaptureReplayEvidence VerifyCaptureJournal()
         => _captureConsent.InspectReplay();
