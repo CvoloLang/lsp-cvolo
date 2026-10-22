@@ -39,8 +39,6 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     private long _transportDidChange;
     private long _transportDidClose;
     private bool _transportCountsOverflowed;
-    private readonly List<(long Sequence, string Kind)> _assignedIngress = [];
-    private bool _assignedIngressOverflowed;
     private readonly List<CapturedDocumentHandlerEntry> _handlerEntries = [];
     private readonly List<CapturedDocumentInput> _inputLedger = [];
     private readonly List<CapturedDocumentSnapshot> _journal = [];
@@ -177,11 +175,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 _journal.Clear();
                 _inputLedger.Clear();
                 _handlerEntries.Clear();
-                _assignedIngress.Clear();
-                _assignedIngressOverflowed = false;
-                _assignedIngress.Clear();
-        _assignedIngressOverflowed = false;
-        _transportDidOpen = 0;
+                _transportDidOpen = 0;
                 _transportDidChange = 0;
                 _transportDidClose = 0;
                 _transportCountsOverflowed = false;
@@ -294,23 +288,6 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     /// source, URI, JSON parameters, request ids or file names are read.
     /// It does not by itself prove that the downstream handler ran.
     /// </summary>
-    internal void CaptureAssignedIngress(long ingressSequence, string kind)
-    {
-        if (ingressSequence <= 0 || kind is not ("did_open" or "did_change" or "did_close")) return;
-        lock (_gate)
-        {
-            ExpireIfNeeded();
-            if (!_journalArmed || !_allowSources) return;
-            if (_assignedIngress.Count == MaxInputReceipts)
-            {
-                _assignedIngressOverflowed = true;
-                _inputLedgerIncomplete = true;
-                return;
-            }
-            _assignedIngress.Add((ingressSequence, kind));
-        }
-    }
-
     internal void CaptureTransportNotification(string? method)
     {
         lock (_gate)
@@ -436,9 +413,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 _journal, _journalIncomplete, _inputLedger, _inputLedgerIncomplete,
                 _handlerEntries, new CaptureTransportWitness(
                     _transportDidOpen, _transportDidChange, _transportDidClose,
-                    _transportCountsOverflowed),
-                _assignedIngress.Select(e => new CaptureAssignedIngress(e.Sequence, e.Kind)).ToArray(),
-                _assignedIngressOverflowed);
+                    _transportCountsOverflowed));
         }
     }
 

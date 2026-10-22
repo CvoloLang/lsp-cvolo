@@ -60,8 +60,6 @@ internal sealed class LanguageServer(
     /// </summary>
     internal void ObserveTransportDocumentNotification(string method)
         => RecordingControl.ObserveTransportDocumentNotification(method);
-    internal void ObserveAssignedDocumentIngress(long ingressSequence, string kind)
-        => RecordingControl.ObserveAssignedDocumentIngress(ingressSequence, kind);
     private RecordingControlPlane? _recordingControl;
     private RecordingControlPlane RecordingControl => GetOrCreate(ref _recordingControl, () => new RecordingControlPlane(Observer, recordingSession));
     private readonly DiagnosticSink _diagnostics = new(logger);

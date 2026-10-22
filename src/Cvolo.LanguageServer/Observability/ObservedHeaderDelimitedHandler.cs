@@ -15,7 +15,6 @@ internal sealed class ObservedHeaderDelimitedHandler : HeaderDelimitedMessageHan
 {
 	private readonly RpcObservability? _observability;
 	private readonly Action<string>? _onDocumentNotificationRead;
-	private readonly Action<string, bool>? _onInboundRequestRead;
 	private readonly Func<bool>? _isRejectedInitializePending;
 	private readonly Action? _rejectedInitializeFlushed;
 	private bool _notifyAfterFlush;
@@ -27,13 +26,11 @@ internal sealed class ObservedHeaderDelimitedHandler : HeaderDelimitedMessageHan
 		RpcObservability? observability,
 		Func<bool>? isRejectedInitializePending = null,
 		Action? rejectedInitializeFlushed = null,
-		Action<string>? onDocumentNotificationRead = null,
-		Action<string, bool>? onInboundRequestRead = null)
+		Action<string>? onDocumentNotificationRead = null)
 		: base(writeStream, readStream, formatter)
 	{
 		_observability = observability;
 		_onDocumentNotificationRead = onDocumentNotificationRead;
-		_onInboundRequestRead = onInboundRequestRead;
 		_isRejectedInitializePending = isRejectedInitializePending;
 		_rejectedInitializeFlushed = rejectedInitializeFlushed;
 	}
@@ -44,7 +41,6 @@ internal sealed class ObservedHeaderDelimitedHandler : HeaderDelimitedMessageHan
 
 		if (message is JsonRpcRequest request)
 		{
-			_onInboundRequestRead?.Invoke(request.Method, request.RequestId.IsEmpty);
 			if (request.RequestId.IsEmpty)
 			{
 				// Actual raw read boundary, before JSON-RPC handler dispatch.

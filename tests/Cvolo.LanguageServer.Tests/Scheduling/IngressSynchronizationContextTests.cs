@@ -21,43 +21,6 @@ internal sealed class PingTarget
 public sealed class IngressSynchronizationContextTests
 {
     [Fact]
-    public async Task Document_is_admitted_at_transport_read_before_handler_dispatch()
-    {
-        var pipeline = new IngressPipeline();
-        var admitted = new List<(long Seq, string Kind)>();
-        pipeline.DocumentIngressAdmitted = (seq, kind) => admitted.Add((seq, kind));
-
-        pipeline.ObserveInboundRpc("textDocument/didOpen", notification: true);
-        pipeline.ObserveInboundRpc("textDocument/hover", notification: false);
-        Assert.Equal(1L, Assert.Single(admitted).Seq);
-        Assert.Equal("did_open", admitted[0].Kind);
-        Assert.Equal(1, pipeline.Inputs.Metrics.Admitted);
-
-        // The read request cannot bypass an older didOpen handler that is
-        // delayed before attaching to the ordered writer.
-        Task<BarrierOutcome> barrier = pipeline.Inputs.WaitForInputsBeforeAsync(
-            new IngressSequence(2), TimeSpan.FromSeconds(3));
-        Assert.False(barrier.IsCompleted);
-        Assert.Equal(1L, pipeline.AssignDispatch().Value);
-        Assert.Equal(2L, pipeline.AssignDispatch().Value);
-        pipeline.Inputs.Attach(new IngressSequence(1), () => InputDisposition.Applied);
-        Assert.Equal(BarrierOutcome.Satisfied, await barrier);
-        Assert.False(pipeline.PairingStatus.Incomplete);
-        Assert.Equal(0, pipeline.PairingStatus.Pending);
-    }
-
-    [Fact]
-    public void Unmatched_dispatch_marks_incomplete_instead_of_guessing()
-    {
-        var pipeline = new IngressPipeline();
-        Assert.Equal(1L, pipeline.AssignDispatch().Value);
-        Assert.True(pipeline.PairingStatus.Incomplete);
-        pipeline.ObserveInboundRpc("textDocument/didClose", notification: true);
-        Assert.Equal(2L, pipeline.AssignDispatch().Value);
-        Assert.Equal(1, pipeline.Inputs.Metrics.Admitted);
-    }
-
-    [Fact]
     public async Task Frames_AreStampedInReceiveOrder()
     {
         var target = new PingTarget();

@@ -554,37 +554,6 @@ public sealed class CaptureConsentStateTests
         Assert.True(result.FirstKnownFailure.AllFailureOrdersKnown);
     }
 
-    [Fact]
-    public void Assigned_ingress_correlates_with_scoped_handler_without_proving_full_stream()
-    {
-        var state = ArmedJournal();
-        state.CaptureAssignedIngress(11, "did_open");
-        state.CaptureHandlerEntered(new Uri(Document), "did_open", 1, 11);
-        state.CaptureCommitted(new Uri(Document), 1, "abc", isDidOpen: true,
-            ingressSequence: 11);
-        state.CaptureSettled(new Uri(Document), "did_open", "applied", 1, 11);
-
-        var evidence = state.InspectReplay();
-        Assert.Equal(1, evidence.AdmissionCorrelation!.AdmittedDocumentFrames);
-        Assert.Equal(1, evidence.AdmissionCorrelation.MatchedHandlerEntries);
-        Assert.Equal(0, evidence.AdmissionCorrelation.HandlerEntriesWithoutAdmissionReceipt);
-        Assert.False(evidence.AdmissionCorrelation.CompleteTransportHistoryProven);
-        Assert.False(evidence.ReplayComplete);
-    }
-
-    [Fact]
-    public void Ingress_admission_is_cleared_by_revoke()
-    {
-        var state = ArmedJournal();
-        state.CaptureAssignedIngress(42, "did_change");
-        Assert.Equal(1, state.InspectReplay().AdmissionCorrelation!.AdmittedDocumentFrames);
-        state.Revoke(new CaptureConsentRevoke
-        {
-            ProtocolVersion = 1, ServerInstanceId = ServerId,
-        }, ServerId);
-        Assert.Equal(0, state.InspectReplay().AdmissionCorrelation!.AdmittedDocumentFrames);
-    }
-
     private static CaptureConsentState ArmedJournal()
     {
         var state = new CaptureConsentState();
