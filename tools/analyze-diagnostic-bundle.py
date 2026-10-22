@@ -11,6 +11,7 @@ import re
 import sys
 import zipfile
 from causal_graph import make_graph, marker_request_candidates
+from dependency_audit import inspect_dependencies
 from pathlib import Path
 from datetime import datetime
 
@@ -153,6 +154,7 @@ def analyze(path):
                 "requestUid": safe_id(row.get("requestUid"), REQUEST),
                 "operationId": safe_id(row.get("operationId"), OP),
                 "parentOperationId": safe_id(row.get("parentOperationId"), OP),
+                "dependencyId": safe_id(attrs.get("dependencyId"), OP) if isinstance(attrs, dict) else None,
                 "analysisId": safe_id(row.get("analysisId"), ANALYSIS),
                 "snapshotId": safe_id(row.get("snapshotId"), OP),
                 "stage": word(row.get("stage")),
@@ -162,6 +164,7 @@ def analyze(path):
     # Physical JSONL order is not producer order: P0 can overtake P1/P2.
     records.sort(key=lambda e: (e["_emitter"], e["_seq"]))
     graph, request_events = make_graph(records)
+    graph["dependencyAudit"] = inspect_dependencies(records)
     markers = []
     for marker in (x for x in records if x["event"] == "diagnostic.marker" and x["markerId"]):
         nearby_events, request_candidates = marker_request_candidates(marker, records, request_events)
@@ -198,6 +201,10 @@ def analyze(path):
         warnings.append("invalid_or_missing_timestamps")
     if any(s != 2 for s in majors):
         warnings.append("unsupported_schema_present")
+    if graph["dependencyAudit"]["unresolvedLinks"]:
+        warnings.append("unresolved_operation_links")
+    if graph["dependencyAudit"]["lifecycleFindings"]:
+        warnings.append("operation_lifecycle_uncertainty")
     integrity = {
         "analyzerVersion": 1, "archiveHashesVerified": True,
         "payloadOrder": "per_emitter_producer_sequence", "validEventCount": len(records),
@@ -227,6 +234,9 @@ def analyze(path):
     if not markers:
         summary.append("No valid diagnostic.marker found in retained segments.")
     summary.append("")
+    summary += ["", "## Operation dependency audit", ""]
+    audit = graph["dependencyAudit"]
+    summary.append("Explicit links: " + str(audit["edgeCount"]) + "; unresolved: " + str(len(audit["unresolvedLinks"])) + "; lifecycle findings: " + str(len(audit["lifecycleFindings"])) + ".")
     summary += ["", "## Observed request chains", ""]
     for req in graph["requests"][:200]:
         failure = req["firstObservedFailure"]

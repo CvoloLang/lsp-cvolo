@@ -159,5 +159,38 @@ class AnalyzerTests(unittest.TestCase):
             self.assertFalse(graph["requests"][0]["terminalObserved"])
 
 
+    def test_explicit_dependency_edge_and_missing_target_are_distinguished(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "deps.zip"
+            make_zip(f, [
+                event(1, "operation.started", operationId="op-root"),
+                event(2, "operation.started", operationId="op-child", parentOperationId="op-root"),
+                event(3, "operation.depends_on", operationId="op-child",
+                      attributes={"dependencyId": "op-root"}),
+                event(4, "operation.depends_on", operationId="op-child",
+                      attributes={"dependencyId": "op-missing"}),
+                event(5, "operation.completed", operationId="op-child"),
+            ])
+            audit = analyzer.analyze(f)["operations.json"]["dependencyAudit"]
+            self.assertEqual(2, audit["edgeCount"])
+            self.assertEqual("target_not_in_retained_trace", audit["unresolvedLinks"][0]["reason"])
+            self.assertTrue(any(x["operationId"] == "op-root" and
+                                x["finding"] == "terminal_not_observed"
+                                for x in audit["lifecycleFindings"]))
+
+    def test_missing_dependency_identity_and_duplicate_terminal_are_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "deps.zip"
+            make_zip(f, [
+                event(1, "operation.started", operationId="op-one"),
+                event(2, "operation.depends_on", operationId="op-one"),
+                event(3, "operation.completed", operationId="op-one"),
+                event(4, "operation.faulted", operationId="op-one"),
+            ])
+            audit = analyzer.analyze(f)["operations.json"]["dependencyAudit"]
+            self.assertEqual("dependency_target_unavailable", audit["unresolvedLinks"][0]["reason"])
+            self.assertEqual("multiple_terminal_events_observed", audit["lifecycleFindings"][0]["finding"])
+
+
 if __name__ == "__main__":
     unittest.main()
