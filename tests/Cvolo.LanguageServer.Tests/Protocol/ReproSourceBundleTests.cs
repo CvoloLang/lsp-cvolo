@@ -60,6 +60,23 @@ public sealed class ReproSourceBundleTests
     }
 
     [Fact]
+    public void Empty_or_close_only_captures_are_not_valid_source_archives()
+    {
+        var empty = Array.Empty<CapturedDocumentSnapshot>();
+        Assert.Throws<InvalidDataException>(() => ReproSourceBundle.Build(
+            new CaptureExportSnapshot("lease", empty,
+                CaptureReplayVerifier.Inspect(empty, true))));
+        CapturedDocumentSnapshot[] closeOnly =
+        [
+            new(Uri, 0, "", CaptureReplayVerifier.ComputeDigest(""),
+                false, null, 1, true),
+        ];
+        Assert.Throws<InvalidDataException>(() => ReproSourceBundle.Build(
+            new CaptureExportSnapshot("lease", closeOnly,
+                CaptureReplayVerifier.Inspect(closeOnly, true))));
+    }
+
+    [Fact]
     public void Archive_verification_detects_tampered_source_member_and_manifest()
     {
         CapturedDocumentSnapshot[] snapshots =
@@ -127,6 +144,35 @@ public sealed class ReproSourceBundleTests
         Assert.False(state.CommitExport(snapshot!.LeaseId, () => committed = true));
         Assert.False(committed);
         Assert.False(state.TryPrepareSourceExport(request, serverId, out _, out _));
+    }
+
+    [Fact]
+    public void Sealed_empty_capture_rejects_export_without_publishing_a_file()
+    {
+        var state = new CaptureConsentState();
+        const string serverId = "test-server";
+        var grant = state.Grant(new CaptureConsentGrant
+        {
+            ProtocolVersion = 1, ServerInstanceId = serverId,
+            UserConfirmed = true, CaptureSources = true,
+            TtlSeconds = 60, DocumentUris = [Uri],
+        }, serverId);
+        state.Arm(new CaptureJournalArm
+        {
+            ProtocolVersion = 1, ServerInstanceId = serverId,
+            LeaseId = grant.LeaseId,
+        }, serverId);
+        state.Seal(new CaptureJournalSeal
+        {
+            ProtocolVersion = 1, ServerInstanceId = serverId,
+            LeaseId = grant.LeaseId,
+        }, serverId);
+        Assert.False(state.TryPrepareSourceExport(new ReproExportRequest
+        {
+            ProtocolVersion = 1, ServerInstanceId = serverId,
+            LeaseId = grant.LeaseId, ExplicitUserConfirmation = true,
+        }, serverId, out _, out string? reason));
+        Assert.Equal("no_scoped_source_snapshots", reason);
     }
 
     [Fact]

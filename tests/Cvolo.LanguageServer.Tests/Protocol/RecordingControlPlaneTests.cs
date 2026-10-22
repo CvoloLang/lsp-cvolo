@@ -490,11 +490,11 @@ public sealed class RecordingControlPlaneTests
             serverId, (string)grant["leaseId"]!);
         Assert.Equal("armed_in_memory", (string?)armed["status"]);
         Assert.True((bool)armed["journalActive"]!);
-        Assert.False((bool)armed["sourceExportSupported"]!);
+        Assert.True((bool)armed["sourceExportSupported"]!);
         JObject status = await server.Client.GetCaptureConsentStatusAsync();
         Assert.True((bool)status["journalActive"]!);
         Assert.Equal(0, (int)status["capturedSnapshots"]!);
-        Assert.False((bool)status["sourceExportSupported"]!);
+        Assert.True((bool)status["sourceExportSupported"]!);
 
         JObject notRepro = await server.Client.SetRecordingPolicyAsync("repro");
         Assert.Equal("rejected", (string?)notRepro["status"]);
@@ -546,8 +546,21 @@ public sealed class RecordingControlPlaneTests
         string lease = (string)granted["leaseId"]!;
         await session.Client.ArmCaptureJournalAsync(serverId, lease);
         await session.Client.NotifyDidOpenAsync(new Uri(documentUri), "cvolo", 1, "SECRET_REPRO_CONTENT");
-        await session.Client.DrainNotificationsAsync();
-        await session.Client.SealCaptureJournalAsync(serverId, lease);
+        // StreamJsonRpc dispatch is concurrent. A subsequent request is not a
+        // proof that didOpen already committed. Wait for the observable source
+        // snapshot instead of assuming read/dispatch FIFO correspondence.
+        bool hasSnapshot = false;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        do
+        {
+            JObject statusBeforeSeal = await session.Client.GetCaptureConsentStatusAsync();
+            hasSnapshot = (int?)statusBeforeSeal["capturedSnapshots"] >= 1;
+            if (hasSnapshot) break;
+            await Task.Delay(10);
+        } while (DateTime.UtcNow < deadline);
+        Assert.True(hasSnapshot, "didOpen snapshot was not observed before sealing");
+        JObject sealAck = await session.Client.SealCaptureJournalAsync(serverId, lease);
+        Assert.Equal("sealed_in_memory", (string?)sealAck["status"]);
         JObject denied = await session.Client.ExportSourceReproAsync(serverId, lease);
         Assert.Equal("explicit_export_confirmation_required", (string?)denied["reason"]);
         JObject ack = await session.Client.ExportSourceReproAsync(serverId, lease, true);
@@ -564,8 +577,11 @@ public sealed class RecordingControlPlaneTests
             Assert.True(verified.VerifiedSources >= 1);
             using var zip = new System.IO.Compression.ZipArchive(new MemoryStream(bytes),
                 System.IO.Compression.ZipArchiveMode.Read);
-            Assert.DoesNotContain("private-archive.cvl", (string)ack["manifestSha256"]!);
-            Assert.NotNull(zip.GetEntry("repro-manifest.json"));
+            using var reader = new StreamReader(zip.GetEntry("repro-manifest.json")!.Open());
+            string manifest = await reader.ReadToEndAsync();
+            Assert.DoesNotContain("private-archive.cvl", manifest);
+            Assert.DoesNotContain("C:/project", manifest);
+            Assert.Contains("doc-0001/session-0001", manifest);
         }
         finally { File.Delete(path); }
     }

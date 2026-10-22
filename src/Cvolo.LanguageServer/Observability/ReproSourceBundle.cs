@@ -23,6 +23,11 @@ internal static class ReproSourceBundle
 
     internal static ReproBundleBytes Build(CaptureExportSnapshot source)
     {
+        if (source.Snapshots.Count == 0
+            || !source.Snapshots.Any(s => !s.IsDidClose))
+            throw new InvalidDataException("no_scoped_source_snapshots");
+        if (source.Snapshots.Count > CaptureConsentState.MaxJournalSnapshots)
+            throw new InvalidDataException("too_many_source_snapshots");
         var documents = new Dictionary<string, (string Id, int Session)>(
             StringComparer.Ordinal);
         var records = new List<ReproSourceRecord>(source.Snapshots.Count);
@@ -131,7 +136,8 @@ internal static class ReproSourceBundle
                 || manifest.ProjectClosureVerified || manifest.SemanticClosureVerified
                 || !manifest.ContainsSensitiveSources
                 || manifest.Snapshots is null
-                || manifest.Snapshots.Count > CaptureConsentState.MaxJournalSnapshots)
+                || manifest.Snapshots.Count > CaptureConsentState.MaxJournalSnapshots
+                || !manifest.Snapshots.Any(s => s.Kind != "did_close"))
                 return new(false, "unsupported_or_invalid_manifest", 0, false);
             if (manifestBytes.Length > 512 * 1024
                 || zip.Entries.Any(e => e.FullName != "repro-manifest.json"

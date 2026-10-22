@@ -478,6 +478,10 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 reason = "consent_lease_mismatch";
             else if (!_allowSources || !_journalSealed)
                 reason = "sealed_source_journal_required";
+            else if (!_journal.Any(s => !s.IsDidClose))
+                // An empty capture is not a source repro. A request that races
+                // didOpen before its handler must not produce a misleading ZIP.
+                reason = "no_scoped_source_snapshots";
             else
             {
                 snapshot = new CaptureExportSnapshot(_leaseId, _journal.ToArray(),
