@@ -13,6 +13,7 @@ import zipfile
 from causal_graph import make_graph, marker_request_candidates
 from dependency_audit import inspect_dependencies
 from timeline_audit import audit_observed_events
+from privacy_coverage import PrivacyRiskScan, observed_coverage
 from pathlib import Path
 from datetime import datetime
 
@@ -111,6 +112,8 @@ def read_bundle(archive_path):
 def analyze(path):
     manifest, members = read_bundle(path)
     records, invalid, seen, majors = [], [], set(), set()
+    privacy = PrivacyRiskScan()
+    privacy.inspect(manifest, 'manifest.json', is_manifest=True)
     for segment in manifest["segments"]:
         name = segment["entry"]
         try:
@@ -128,6 +131,8 @@ def analyze(path):
             except ValueError:
                 invalid.append({"eventRef": ref, "reason": "invalid_json"})
                 continue
+            if isinstance(row, dict):
+                privacy.inspect(row, ref)
             if not isinstance(row, dict):
                 invalid.append({"eventRef": ref, "reason": "invalid_envelope"})
                 continue
@@ -171,6 +176,8 @@ def analyze(path):
     graph, request_events = make_graph(records)
     graph["dependencyAudit"] = inspect_dependencies(records)
     timeline, assertions, performance = audit_observed_events(records, graph)
+    privacy_report = privacy.report(invalid_records=len(invalid))
+    coverage = observed_coverage(records, manifest['checkpoint'])
     markers = []
     for marker in (x for x in records if x["event"] == "diagnostic.marker" and x["markerId"]):
         nearby_events, request_candidates = marker_request_candidates(marker, records, request_events)
@@ -207,6 +214,8 @@ def analyze(path):
         warnings.append("invalid_or_missing_timestamps")
     if any(s != 2 for s in majors):
         warnings.append("unsupported_schema_present")
+    if privacy_report["riskCount"]:
+        warnings.append("privacy_review_required")
     if graph["dependencyAudit"]["unresolvedLinks"]:
         warnings.append("unresolved_operation_links")
     if graph["dependencyAudit"]["lifecycleFindings"]:
@@ -245,6 +254,9 @@ def analyze(path):
     summary += ["", "## Operation dependency audit", ""]
     audit = graph["dependencyAudit"]
     summary.append("Explicit links: " + str(audit["edgeCount"]) + "; unresolved: " + str(len(audit["unresolvedLinks"])) + "; lifecycle findings: " + str(len(audit["lifecycleFindings"])) + ".")
+    summary += ["", "## Privacy and coverage", ""]
+    summary.append("Privacy audit: unverified; " + str(privacy_report["riskCount"]) + " possible risk findings.")
+    summary.append("Coverage: observed event presence only; unobserved groups are unknown, not proof of missing instrumentation.")
     summary += ["", "## Observed invariants", ""]
     for check in assertions["invariants"]:
         summary.append("- " + check["invariant"] + ": " + check["status"]
@@ -262,6 +274,8 @@ def analyze(path):
               + json.dumps(integrity, sort_keys=True, indent=2) + "\n\nINCIDENT INDEX\n"
               + json.dumps(index, sort_keys=True, indent=2) + "\n\nOPERATION GRAPH\n"
               + json.dumps(graph, sort_keys=True, indent=2)
+              + "\n\nPRIVACY\n" + json.dumps(privacy_report, sort_keys=True, indent=2)
+              + "\n\nCOVERAGE\n" + json.dumps(coverage, sort_keys=True, indent=2)
               + "\n\nASSERTIONS\n" + json.dumps(assertions, sort_keys=True, indent=2)
               + "\n\nPERFORMANCE\n" + json.dumps(performance, sort_keys=True, indent=2)
               + "\n\nFULL EVENT TIMELINE: emitted separately in timeline.jsonl; original verified ZIP required for raw evidence. "
@@ -269,7 +283,8 @@ def analyze(path):
     sanitized_timeline = "".join(json.dumps(item, sort_keys=True, ensure_ascii=True) + "\n"
                                  for item in timeline)
     return {"integrity.json": integrity, "incident-index.json": index,
-            "operations.json": graph, "assertions.json": assertions,
+            "operations.json": graph, "privacy.json": privacy_report,
+            "coverage.json": coverage, "assertions.json": assertions,
             "performance.json": performance, "timeline.jsonl": sanitized_timeline,
             "summary.md": summary_text, "diagnostic-report.txt": report}
 

@@ -103,7 +103,7 @@ class AnalyzerTests(unittest.TestCase):
             run = subprocess.run([sys.executable, str(SCRIPT), str(f), str(dest)],
                                  capture_output=True, text=True)
             self.assertEqual(0, run.returncode, run.stderr)
-            self.assertEqual({"summary.md", "integrity.json", "incident-index.json", "operations.json", "diagnostic-report.txt", "assertions.json", "performance.json", "timeline.jsonl"},
+            self.assertEqual({"summary.md", "integrity.json", "incident-index.json", "operations.json", "diagnostic-report.txt", "assertions.json", "performance.json", "timeline.jsonl", "privacy.json", "coverage.json"},
                              {p.name for p in dest.iterdir()})
             self.assertEqual(1, len(json.loads((dest / "incident-index.json").read_text())["markers"]))
 
@@ -133,7 +133,7 @@ class AnalyzerTests(unittest.TestCase):
             self.assertTrue(req["terminalObserved"])
             self.assertEqual(4, len(req["eventRefs"]))
             self.assertIn("symbol_lookup_miss", data["diagnostic-report.txt"])
-            self.assertIn("FULL EVENT TIMELINE: not embedded", data["diagnostic-report.txt"])
+            self.assertIn("FULL EVENT TIMELINE: emitted separately in timeline.jsonl", data["diagnostic-report.txt"])
 
     def test_temporal_marker_does_not_prove_request_cause(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -221,6 +221,39 @@ class AnalyzerTests(unittest.TestCase):
                              out["assertions.json"]["invariants"][1]["evidence"][0]["eventRef"])
             self.assertEqual("unknown", out["performance.json"]["criticalPath"])
             self.assertIn("observed_invariant_violation", out["integrity.json"]["warnings"])
+
+
+    def test_privacy_audit_reports_evidence_without_copying_private_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = pathlib.Path(tmp) / "private.zip"
+            make_zip(archive, [
+                event(1, "feature.request.completed",
+                      attributes={"sourceText": "secret source content",
+                                  "danger": "file:///home/alice/private.cvl",
+                                  "authorization": "Bearer verySecretToken12345"})
+            ])
+            report = analyzer.analyze(archive)
+            privacy = report["privacy.json"]
+            self.assertEqual("risk_detected", privacy["assessment"])
+            self.assertGreaterEqual(privacy["riskCount"], 2)
+            for token in ("secret source content", "/home/alice", "verySecretToken12345"):
+                self.assertNotIn(token, json.dumps(report))
+            self.assertEqual("events/segment-0000.jsonl:1", privacy["findings"][0]["eventRef"])
+            self.assertIn("privacy_review_required", report["integrity.json"]["warnings"])
+
+    def test_coverage_only_claims_observed_event_presence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = pathlib.Path(tmp) / "coverage.zip"
+            make_zip(archive, [event(1, "diagnostic.marker",
+                                     clientActionId="marker-" + "b"*32,
+                                     attributes={"category": "definition"})])
+            report = analyzer.analyze(archive)
+            coverage = report["coverage.json"]
+            groups = {entry["group"]: entry for entry in coverage["groups"]}
+            self.assertEqual("observed", groups["user_incident_markers"]["status"])
+            self.assertEqual("not_observed", groups["snapshot_lifecycle"]["status"])
+            self.assertTrue(coverage["notObservedDoesNotMeanUninstrumented"])
+            self.assertFalse(coverage["completenessProven"])
 
 
 if __name__ == "__main__":
