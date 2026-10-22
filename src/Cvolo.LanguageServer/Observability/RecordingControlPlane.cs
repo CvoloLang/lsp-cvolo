@@ -317,6 +317,11 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
         _captureConsent.CaptureTransportNotification(method);
     }
 
+    internal void ObserveAssignedDocumentIngress(long sequence, string kind)
+    {
+        _captureConsent.CaptureAssignedIngress(sequence, kind);
+    }
+
     internal CaptureReplayEvidence VerifyCaptureJournal()
         => _captureConsent.InspectReplay();
 
