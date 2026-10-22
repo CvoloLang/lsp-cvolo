@@ -16,10 +16,14 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string CheckpointMethod = "cvolo/observability/checkpoint.v1";
     internal const string ExportMethod = "cvolo/observability/export.v1";
     internal const string MarkerMethod = "cvolo/observability/addMarker.v1";
+    internal const string GrantConsentMethod = "cvolo/observability/grantCaptureConsent.v1";
+    internal const string RevokeConsentMethod = "cvolo/observability/revokeCaptureConsent.v1";
+    internal const string ConsentStatusMethod = "cvolo/observability/captureConsentStatus.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
     private readonly object _gate = new();
+    private readonly CaptureConsentState _captureConsent = new();
 
     internal bool Supported => _runtime is not null;
 
@@ -225,6 +229,36 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
         }
     }
 
+    /// <summary>
+    /// Registers intent only. No implementation of source/path capture exists
+    /// yet, so a lease must never make repro or sensitive modes effective.
+    /// </summary>
+    internal CaptureConsentAck GrantCaptureConsent(CaptureConsentGrant? request, bool initialized)
+    {
+        lock (_gate)
+        {
+            if (!initialized || _runtime is null)
+                return new(Version, "rejected",
+                    !initialized ? "server_not_initialized" : "observer_unavailable",
+                    null, null, false, false);
+            return _captureConsent.Grant(request, _runtime.Identity.ServerInstanceId);
+        }
+    }
+
+    internal CaptureConsentAck RevokeCaptureConsent(CaptureConsentRevoke? request, bool initialized)
+    {
+        lock (_gate)
+        {
+            if (!initialized || _runtime is null)
+                return new(Version, "rejected",
+                    !initialized ? "server_not_initialized" : "observer_unavailable",
+                    null, null, false, false);
+            return _captureConsent.Revoke(request, _runtime.Identity.ServerInstanceId);
+        }
+    }
+
+    internal CaptureConsentStatus GetCaptureConsentStatus() => _captureConsent.Status();
+
     internal RecordingPolicyAck Apply(RecordingPolicyRequest? request, bool initialized)
     {
         DateTimeOffset requestedAt = DateTimeOffset.UtcNow;
@@ -246,10 +280,12 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
             // Recording level is NOT permission to capture source code, paths
             // or forensic material. These requests have no effect on the mode.
             if (request.CaptureSources || request.CapturePaths || request.ForensicScope)
-                return Reject("consent_required");
+                return Reject(_captureConsent.Status().Status == "registered_not_capturing"
+                    ? "sensitive_capture_not_implemented" : "consent_required");
 
             if (requested == "repro")
-                return Reject("forensic_consent_required");
+                return Reject(_captureConsent.Status().Status == "registered_not_capturing"
+                    ? "sensitive_capture_not_implemented" : "forensic_consent_required");
 
             ObservabilityMode mode;
             switch (requested)

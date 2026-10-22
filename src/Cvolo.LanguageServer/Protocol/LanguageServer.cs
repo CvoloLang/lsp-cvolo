@@ -455,6 +455,10 @@ internal sealed class LanguageServer(
                         getCheckpoint = RecordingControlPlane.CheckpointMethod,
                         export = RecordingControlPlane.ExportMethod,
                         addMarker = RecordingControlPlane.MarkerMethod,
+                        grantCaptureConsent = RecordingControlPlane.GrantConsentMethod,
+                        revokeCaptureConsent = RecordingControlPlane.RevokeConsentMethod,
+                        getCaptureConsentStatus = RecordingControlPlane.ConsentStatusMethod,
+                        capturePipelineSupported = false,
                         supportedModes = new[] { "off", "basic", "detailed" },
                         captureSourcesSupported = false,
                         exportSupported = recordingSession?.SupportsBundleExport == true,
@@ -525,6 +529,20 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.MarkerMethod, UseSingleObjectParameterDeserialization = true)]
     public RecordingMarkerAck AddDiagnosticMarker(RecordingMarkerRequest? request)
         => RecordingControl.AddMarker(request, _state.InitializeReceived);
+
+    /// <summary>Register scoped, time-limited consent intent (no capture enabled).</summary>
+    [JsonRpcMethod(RecordingControlPlane.GrantConsentMethod, UseSingleObjectParameterDeserialization = true)]
+    public CaptureConsentAck GrantCaptureConsent(CaptureConsentGrant? request)
+        => RecordingControl.GrantCaptureConsent(request, _state.InitializeReceived);
+
+    /// <summary>Clear any in-memory consent scope immediately.</summary>
+    [JsonRpcMethod(RecordingControlPlane.RevokeConsentMethod, UseSingleObjectParameterDeserialization = true)]
+    public CaptureConsentAck RevokeCaptureConsent(CaptureConsentRevoke? request)
+        => RecordingControl.RevokeCaptureConsent(request, _state.InitializeReceived);
+
+    [JsonRpcMethod(RecordingControlPlane.ConsentStatusMethod)]
+    public CaptureConsentStatus GetCaptureConsentStatus()
+        => RecordingControl.GetCaptureConsentStatus();
 
     /// <summary>
     /// Applies an explicit mode request and returns the server-owned epoch.

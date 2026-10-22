@@ -424,6 +424,55 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Capture_consent_is_scope_bound_revocable_and_never_enables_source_capture()
+    {
+        var (observer, _) = CreateObserver();
+        using var server = ProtocolSession.Start(observer: observer);
+        await server.Client.InitializeAsync();
+        string serverId = observer.Identity.ServerInstanceId;
+
+        JObject denied = await server.Client.GrantCaptureConsentAsync(
+            serverId, ["file:///C:/project/main.cvl"], true, false, 60, userConfirmed: false);
+        Assert.Equal("rejected", (string?)denied["status"]);
+        Assert.Equal("explicit_user_confirmation_required", (string?)denied["reason"]);
+
+        JObject grant = await server.Client.GrantCaptureConsentAsync(
+            serverId, ["file:///C:/project/main.cvl"], true, false, 60);
+        Assert.Equal("registered_not_capturing", (string?)grant["status"]);
+        Assert.False((bool)grant["captureActive"]!);
+        Assert.False((bool)grant["capturePipelineSupported"]!);
+        Assert.NotNull(grant["leaseId"]);
+
+        JObject status = await server.Client.GetCaptureConsentStatusAsync();
+        Assert.Equal(1, (int)status["scopedDocumentCount"]!);
+        Assert.True((bool)status["sourcePermissionRequested"]!);
+        Assert.False((bool)status["pathPermissionRequested"]!);
+        Assert.Equal("uri_syntax_only", (string?)status["scopeVerification"]);
+        Assert.False((bool)status["captureActive"]!);
+
+        JObject notImplemented = await server.Client.SetRecordingPolicyAsync("repro");
+        Assert.Equal("rejected", (string?)notImplemented["status"]);
+        Assert.Equal("sensitive_capture_not_implemented", (string?)notImplemented["reason"]);
+        Assert.Equal(ObservabilityMode.Off, observer.Mode);
+        Assert.Equal(0, observer.Identity.RecordingEpoch);
+
+        JObject wrong = await server.Client.RevokeCaptureConsentAsync("other-server");
+        Assert.Equal("rejected", (string?)wrong["status"]);
+        Assert.Equal("server_instance_mismatch", (string?)wrong["reason"]);
+
+        JObject revoked = await server.Client.RevokeCaptureConsentAsync(serverId);
+        Assert.Equal("revoked", (string?)revoked["status"]);
+        Assert.False((bool)revoked["captureActive"]!);
+        JObject after = await server.Client.GetCaptureConsentStatusAsync();
+        Assert.Equal("none", (string?)after["status"]);
+        Assert.Equal(0, (int)after["scopedDocumentCount"]!);
+        Assert.False((bool)after["existingArchivesErased"]!);
+
+        JObject reproWithoutConsent = await server.Client.SetRecordingPolicyAsync("repro");
+        Assert.Equal("forensic_consent_required", (string?)reproWithoutConsent["reason"]);
+    }
+
+    [Fact]
     public async Task Noop_observer_cannot_report_a_successful_start()
     {
         using var session = ProtocolSession.Start();

@@ -97,6 +97,22 @@ internal sealed class TestClient : IDisposable
     public Task<JObject> GetRecordingCheckpointAsync() =>
         _rpc.InvokeAsync<JObject>("cvolo/observability/checkpoint.v1");
 
+    public Task<JObject> GrantCaptureConsentAsync(
+        string serverInstanceId, string[] documentUris, bool captureSources,
+        bool capturePaths, int ttlSeconds, bool userConfirmed = true, int protocolVersion = 1) =>
+        _rpc.InvokeWithParameterObjectAsync<JObject>(
+            "cvolo/observability/grantCaptureConsent.v1",
+            new { protocolVersion, serverInstanceId, documentUris, captureSources,
+                  capturePaths, ttlSeconds, userConfirmed });
+
+    public Task<JObject> RevokeCaptureConsentAsync(string serverInstanceId, int protocolVersion = 1) =>
+        _rpc.InvokeWithParameterObjectAsync<JObject>(
+            "cvolo/observability/revokeCaptureConsent.v1",
+            new { protocolVersion, serverInstanceId });
+
+    public Task<JObject> GetCaptureConsentStatusAsync() =>
+        _rpc.InvokeAsync<JObject>("cvolo/observability/captureConsentStatus.v1");
+
     public Task<JObject> AddDiagnosticMarkerAsync(string category, int protocolVersion = 1) =>
         _rpc.InvokeWithParameterObjectAsync<JObject>(
             "cvolo/observability/addMarker.v1",
