@@ -90,7 +90,7 @@ public sealed class CaptureConsentStateTests
         Assert.Equal(16, state.Status().CapturedCharacters);
         Assert.True(state.Status().JournalIncomplete);
         Assert.True(state.Status().JournalActive);
-        Assert.False(state.Status().SourceExportSupported);
+        Assert.True(state.Status().SourceExportSupported);
 
         state.Revoke(new CaptureConsentRevoke
         {
