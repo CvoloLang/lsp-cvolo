@@ -21,7 +21,9 @@ internal sealed record CaptureInputReconciliation(
     int ObservedInputs, int AppliedInputs, int RejectedInputs,
     int MatchedSnapshots, int UnknownIngressInputs,
     int HandlerEntries = 0, int UnsettledHandlerEntries = 0,
-    int HandlerEntriesWithoutIngress = 0);
+    int HandlerEntriesWithoutIngress = 0,
+    int SettlementsWithoutObservedHandler = 0,
+    int DuplicateHandlerEntries = 0);
 
 /// <summary>
 /// Independently reconciles server-settled document inputs with retained source
@@ -141,6 +143,7 @@ internal static class CaptureInputReconciler
         }
 
         int unknownEntries = 0, unsettled = 0;
+        int unmatchedSettlements = 0, duplicateEntries = 0;
         if (entered is not null)
         {
             // No list-order comparisons: the dispatch path is concurrent.
@@ -149,20 +152,39 @@ internal static class CaptureInputReconciler
             var settlements = inputs.Where(i => i.IngressSequence is > 0)
                 .Select(i => (i.DocumentUri, i.IngressSequence!.Value, i.InputKind))
                 .ToHashSet();
+            var entryKeys = new HashSet<(string DocumentUri, long Value, string InputKind)>();
             foreach (var entry in entered)
             {
                 if (entry.IngressSequence is not > 0)
                     unknownEntries++;
-                else if (!settlements.Contains((entry.DocumentUri,
-                        entry.IngressSequence.Value, entry.InputKind)))
-                    unsettled++;
+                else
+                {
+                    var key = (entry.DocumentUri, entry.IngressSequence.Value, entry.InputKind);
+                    if (!entryKeys.Add(key))
+                    {
+                        duplicateEntries++;
+                        if (firstIssue is null)
+                        {
+                            firstIssue = "duplicate_document_handler_entry";
+                            firstIssueIngress = entry.IngressSequence;
+                        }
+                    }
+                    if (!settlements.Contains(key))
+                        unsettled++;
+                }
             }
+            foreach (var settled in inputs)
+                if (settled.IngressSequence is > 0 &&
+                    !entryKeys.Contains((settled.DocumentUri,
+                        settled.IngressSequence.Value, settled.InputKind)))
+                    unmatchedSettlements++;
         }
 
         // Unsettled is a live/potentially interrupted operation, NOT proven
         // loss. A terminal input barrier would be required to distinguish them.
         return new(firstIssue, firstIssueIngress, inputs.Count,
             applied, rejected, matched, unknown,
-            entered?.Count ?? 0, unsettled, unknownEntries);
+            entered?.Count ?? 0, unsettled, unknownEntries,
+            unmatchedSettlements, duplicateEntries);
     }
 }

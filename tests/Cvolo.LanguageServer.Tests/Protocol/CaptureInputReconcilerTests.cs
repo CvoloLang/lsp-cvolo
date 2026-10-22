@@ -150,6 +150,34 @@ public sealed class CaptureInputReconcilerTests
     }
 
     [Fact]
+    public void Duplicate_handler_entry_is_reported_at_conflicting_ingress()
+    {
+        var result = CaptureInputReconciler.Reconcile(
+            [new(Document, "did_open", "applied", 1, 4)],
+            [Open(Document, 1, 4)],
+            [
+                new(Document, "did_open", 1, 4),
+                new(Document, "did_open", 1, 4),
+            ]);
+        Assert.Equal("duplicate_document_handler_entry", result.FirstIssue);
+        Assert.Equal(4L, result.FirstIssueIngressSequence);
+        Assert.Equal(1, result.DuplicateHandlerEntries);
+        Assert.Equal(0, result.UnsettledHandlerEntries);
+    }
+
+    [Fact]
+    public void Settlement_without_entry_can_be_from_arming_mid_handler()
+    {
+        var result = CaptureInputReconciler.Reconcile(
+            [new(Document, "did_open", "applied", 1, 8)],
+            [Open(Document, 1, 8)],
+            Array.Empty<CapturedDocumentHandlerEntry>());
+        Assert.Null(result.FirstIssue);
+        Assert.Equal(1, result.SettlementsWithoutObservedHandler);
+        Assert.Equal(0, result.UnsettledHandlerEntries);
+    }
+
+    [Fact]
     public void Concurrent_documents_do_not_share_snapshots_by_ingress()
     {
         var result = CaptureInputReconciler.Reconcile(

@@ -56,7 +56,8 @@ internal static class CaptureReplayVerifier
                 firstIssue ??= issue;
                 entries.Add(new CaptureSnapshotEvidence(doc.Id, snapshot.Version,
                     "did_close", 0, snapshot.Sha256Utf16Le, issue, null,
-                    snapshot.IngressSequence));
+                    snapshot.IngressSequence, doc.SessionId));
+                doc.SessionId = null;
                 continue;
             }
             if (!string.Equals(
@@ -68,6 +69,9 @@ internal static class CaptureReplayVerifier
             else if (snapshot.IsDidOpen)
             {
                 doc.Segments++;
+                doc.SessionId = doc.Id + "/session-" +
+                    doc.Segments.ToString("D4",
+                        System.Globalization.CultureInfo.InvariantCulture);
                 doc.HasObservedBaseline = true;
                 doc.LastVersion = null;
             }
@@ -111,7 +115,8 @@ internal static class CaptureReplayVerifier
                 doc.Id, snapshot.Version,
                 snapshot.IsDidOpen ? "did_open" : "did_change",
                 snapshot.Text.Length, snapshot.Sha256Utf16Le, issue,
-                snapshot.AppliedChanges?.Count, snapshot.IngressSequence));
+                snapshot.AppliedChanges?.Count, snapshot.IngressSequence,
+                doc.SessionId));
         }
 
         var documents = perDocument.Values.Select(d => new CaptureDocumentEvidence(
@@ -157,6 +162,7 @@ internal static class CaptureReplayVerifier
         internal string? LastText;
         internal int VerifiedEdits;
         internal bool HasObservedBaseline;
+        internal string? SessionId;
         internal long? LastIngressSequence;
         internal bool AnyIssue;
     }
@@ -165,7 +171,8 @@ internal static class CaptureReplayVerifier
 internal sealed record CaptureSnapshotEvidence(
     string DocumentId, int Version, string InputKind,
     int Utf16CodeUnits, string Sha256Utf16Le, string? Issue,
-    int? CapturedEdits, long? IngressSequence = null);
+    int? CapturedEdits, long? IngressSequence = null,
+    string? DocumentSessionId = null);
 
 internal sealed record CaptureDocumentEvidence(
     string DocumentId, int CapturedSnapshots, int ObservedDidOpens,

@@ -448,6 +448,33 @@ public sealed class CaptureConsentStateTests
     }
 
     [Fact]
+    public void Document_session_ids_track_close_reopen_without_source_leakage()
+    {
+        var state = ArmedJournal();
+        state.CaptureCommitted(new Uri(Document), 10, "secret-old",
+            isDidOpen: true, ingressSequence: 3);
+        state.CaptureSettled(new Uri(Document), "did_open", "applied", 10, 3);
+        state.CaptureClosed(new Uri(Document), ingressSequence: 4);
+        state.CaptureSettled(new Uri(Document), "did_close", "applied", null, 4);
+        state.CaptureCommitted(new Uri(Document), 1, "secret-new",
+            isDidOpen: true, ingressSequence: 5);
+        state.CaptureSettled(new Uri(Document), "did_open", "applied", 1, 5);
+        var report = state.InspectReplay();
+        Assert.Null(report.FirstObservedIssue);
+        Assert.Equal(3, report.Snapshots.Count);
+        Assert.Equal(report.Snapshots[0].DocumentSessionId,
+            report.Snapshots[1].DocumentSessionId);
+        Assert.NotEqual(report.Snapshots[0].DocumentSessionId,
+            report.Snapshots[2].DocumentSessionId);
+        Assert.StartsWith("doc-0001/session-", report.Snapshots[0].DocumentSessionId);
+        string json = System.Text.Json.JsonSerializer.Serialize(report);
+        Assert.DoesNotContain("secret-old", json);
+        Assert.DoesNotContain("secret-new", json);
+        Assert.DoesNotContain("project", json);
+        Assert.False(report.ReplayComplete);
+    }
+
+    [Fact]
     public void Out_of_scope_input_receipts_are_never_retained()
     {
         var state = ArmedJournal();
