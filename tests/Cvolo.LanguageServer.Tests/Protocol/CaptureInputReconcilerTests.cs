@@ -95,6 +95,16 @@ public sealed class CaptureInputReconcilerTests
     }
 
     [Fact]
+    public void Duplicate_snapshots_are_detected_at_conflicting_occurrence()
+    {
+        var result = CaptureInputReconciler.Reconcile(
+            [new(Document, "did_open", "applied", 1, 9)],
+            [Open(Document, 1, 9), Open(Document, 1, 9)]);
+        Assert.Equal("duplicate_retained_snapshot_ingress", result.FirstIssue);
+        Assert.Equal(9L, result.FirstIssueIngressSequence);
+    }
+
+    [Fact]
     public void Concurrent_documents_do_not_share_snapshots_by_ingress()
     {
         var result = CaptureInputReconciler.Reconcile(
