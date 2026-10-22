@@ -77,3 +77,4 @@ public sealed class IngressPipeline
             return Sequencer.Next();
         }
     }
+}
