@@ -222,7 +222,8 @@ internal sealed record CaptureReplayEvidence(
     bool InputLedgerIncomplete = false,
     CaptureTransportWitness? TransportWitness = null,
     CaptureFirstKnownFailure? FirstKnownFailure = null,
-    CaptureVerificationBarrier? VerificationBarrier = null);
+    CaptureVerificationBarrier? VerificationBarrier = null,
+    bool InMemoryJournalSealed = false);
 
 /// <summary>
 /// The earliest known failure by an observed ingress ordinal. This is not

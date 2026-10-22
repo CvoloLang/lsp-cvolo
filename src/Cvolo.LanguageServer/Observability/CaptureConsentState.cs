@@ -29,6 +29,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
     private bool _allowPaths;
     private bool _expired;
     private bool _journalArmed;
+    private bool _journalSealed;
     private bool _journalIncomplete;
     private int _journalChars;
     private int _journalEditCount;
@@ -60,7 +61,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 CapturePipelineSupported: false,
                 ScopeVerification: "uri_syntax_only",
                 ExistingArchivesErased: false,
-                JournalActive: _journalArmed,
+                JournalActive: _journalArmed && !_journalSealed,
                 CapturedSnapshots: _journal.Count,
                 CapturedCharacters: _journalChars,
                 JournalIncomplete: _journalIncomplete,
@@ -70,7 +71,8 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 InputLedgerIncomplete: _inputLedgerIncomplete,
                 HandlerEntries: _handlerEntries.Count,
                 TransportDocumentNotifications: _transportDidOpen +
-                    _transportDidChange + _transportDidClose);
+                    _transportDidChange + _transportDidClose,
+                JournalSealed: _journalSealed);
         }
     }
 
@@ -170,6 +172,9 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
             if (!_allowSources)
                 return Reject("source_permission_required");
 
+            if (_journalSealed)
+                return Reject("journal_already_sealed");
+
             if (!_journalArmed)
             {
                 _journal.Clear();
@@ -192,6 +197,37 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         }
     }
 
+
+    /// <summary>
+    /// Atomically closes the private in-memory producer. Later handler callbacks
+    /// are not retained. This is NOT closure of StreamJsonRpc transport and does
+    /// not prove completeness of input frames preceding the seal request.
+    /// </summary>
+    internal CaptureJournalSealAck Seal(CaptureJournalSeal? request, string? serverInstanceId)
+    {
+        lock (_gate)
+        {
+            ExpireIfNeeded();
+            CaptureJournalSealAck Reject(string reason) => new(
+                Version, "rejected", reason, false, _journal.Count,
+                _inputLedger.Count, false, false, false, "not_checked");
+            if (request is null || request.ProtocolVersion != Version)
+                return Reject("unsupported_protocol_version");
+            if (string.IsNullOrEmpty(serverInstanceId)
+                || !string.Equals(request.ServerInstanceId, serverInstanceId, StringComparison.Ordinal))
+                return Reject("server_instance_mismatch");
+            if (_leaseId is null || _documents is null)
+                return Reject("consent_not_active");
+            if (!string.Equals(request.LeaseId, _leaseId, StringComparison.Ordinal))
+                return Reject("consent_lease_mismatch");
+            if (!_journalArmed || !_allowSources)
+                return Reject("journal_not_armed");
+            _journalSealed = true;
+            return new(Version, "sealed_in_memory", null, true, _journal.Count,
+                _inputLedger.Count, true, false, false, "not_checked");
+        }
+    }
+
     /// <summary>
     /// Called only after a didOpen or didChange is accepted by DocumentStore.
     /// Consent, scope, TTL and byte limits are all checked atomically against
@@ -207,7 +243,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         lock (_gate)
         {
             ExpireIfNeeded();
-            if (!_journalArmed || !_allowSources || _documents is null
+            if (!_journalArmed || _journalSealed || !_allowSources || _documents is null
                 || !uri.IsAbsoluteUri || !uri.IsFile
                 || !_documents.Contains(uri.AbsoluteUri))
                 return;
@@ -293,7 +329,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         lock (_gate)
         {
             ExpireIfNeeded();
-            if (!_journalArmed || !_allowSources)
+            if (!_journalArmed || _journalSealed || !_allowSources)
                 return;
 
             switch (method)
@@ -326,7 +362,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         lock (_gate)
         {
             ExpireIfNeeded();
-            if (!_journalArmed || !_allowSources || _documents is null
+            if (!_journalArmed || _journalSealed || !_allowSources || _documents is null
                 || !uri.IsAbsoluteUri || !uri.IsFile
                 || !_documents.Contains(uri.AbsoluteUri))
                 return;
@@ -354,7 +390,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         lock (_gate)
         {
             ExpireIfNeeded();
-            if (!_journalArmed || !_allowSources || _documents is null
+            if (!_journalArmed || _journalSealed || !_allowSources || _documents is null
                 || !uri.IsAbsoluteUri || !uri.IsFile
                 || !_documents.Contains(uri.AbsoluteUri))
                 return;
@@ -377,7 +413,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         lock (_gate)
         {
             ExpireIfNeeded();
-            if (!_journalArmed || !_allowSources || _documents is null
+            if (!_journalArmed || _journalSealed || !_allowSources || _documents is null
                 || !uri.IsAbsoluteUri || !_documents.Contains(uri.AbsoluteUri))
                 return;
             if (_journal.Count >= MaxJournalSnapshots)
@@ -413,7 +449,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
                 _journal, _journalIncomplete, _inputLedger, _inputLedgerIncomplete,
                 _handlerEntries, new CaptureTransportWitness(
                     _transportDidOpen, _transportDidChange, _transportDidClose,
-                    _transportCountsOverflowed));
+                    _transportCountsOverflowed)) with { InMemoryJournalSealed = _journalSealed };
         }
     }
 
@@ -461,6 +497,7 @@ internal sealed class CaptureConsentState(Func<DateTimeOffset>? clock = null)
         _journalChars = 0;
         _journalEditCount = 0;
         _journalArmed = false;
+        _journalSealed = false;
         _journalIncomplete = false;
         _documents?.Clear();
         _documents = null;
@@ -509,7 +546,8 @@ internal sealed record CaptureConsentStatus(
     int CapturedInputOutcomes = 0,
     bool InputLedgerIncomplete = false,
     int HandlerEntries = 0,
-    long TransportDocumentNotifications = 0);
+    long TransportDocumentNotifications = 0,
+    bool JournalSealed = false);
 
 internal sealed record CaptureConsentAck(
     int ProtocolVersion,
@@ -526,6 +564,20 @@ internal sealed class CaptureJournalArm
     public string? ServerInstanceId { get; set; }
     public string? LeaseId { get; set; }
 }
+
+internal sealed class CaptureJournalSeal
+{
+    public int ProtocolVersion { get; set; }
+    public string? ServerInstanceId { get; set; }
+    public string? LeaseId { get; set; }
+}
+
+/// <summary>Closure of bounded RAM journal, never raw transport or disk.</summary>
+internal sealed record CaptureJournalSealAck(
+    int ProtocolVersion, string Status, string? Reason, bool JournalSealed,
+    int CapturedSnapshots, int CapturedInputOutcomes,
+    bool InternalProducerClosed, bool TransportProducerClosed,
+    bool DurableCheckpointAvailable, string RegisteredInputBarrier);
 
 internal sealed record CaptureJournalAck(
     int ProtocolVersion,

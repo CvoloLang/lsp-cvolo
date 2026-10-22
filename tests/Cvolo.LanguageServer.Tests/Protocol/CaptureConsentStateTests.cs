@@ -554,6 +554,49 @@ public sealed class CaptureConsentStateTests
         Assert.True(result.FirstKnownFailure.AllFailureOrdersKnown);
     }
 
+    [Fact]
+    public void Sealing_freezes_capture_and_revoke_erases_sensitive_state()
+    {
+        var state = ArmedJournal();
+        string lease = state.Status().LeaseId!;
+        state.CaptureCommitted(new Uri(Document), 1, "SECRET_OLD", isDidOpen: true, ingressSequence: 4);
+        state.CaptureHandlerEntered(new Uri(Document), "did_open", 1, 4);
+        state.CaptureSettled(new Uri(Document), "did_open", "applied", 1, 4);
+        state.CaptureTransportNotification("textDocument/didOpen");
+        CaptureJournalSeal request = new()
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId, LeaseId = lease,
+        };
+        Assert.Equal("consent_lease_mismatch", state.Seal(new CaptureJournalSeal
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId, LeaseId = "wrong",
+        }, ServerId).Reason);
+        var ack = state.Seal(request, ServerId);
+        Assert.Equal("sealed_in_memory", ack.Status);
+        Assert.True(ack.InternalProducerClosed);
+        Assert.False(ack.TransportProducerClosed);
+        Assert.False(ack.DurableCheckpointAvailable);
+        Assert.True(state.InspectReplay().InMemoryJournalSealed);
+        string before = System.Text.Json.JsonSerializer.Serialize(state.InspectReplay());
+        state.CaptureCommitted(new Uri(Document), 2, "SECRET_NEW", ingressSequence: 5);
+        state.CaptureHandlerEntered(new Uri(Document), "did_change", 2, 5);
+        state.CaptureSettled(new Uri(Document), "did_change", "applied", 2, 5);
+        state.CaptureTransportNotification("textDocument/didChange");
+        state.CaptureClosed(new Uri(Document), 6);
+        Assert.Equal(before, System.Text.Json.JsonSerializer.Serialize(state.InspectReplay()));
+        Assert.Equal("sealed_in_memory", state.Seal(request, ServerId).Status);
+        Assert.Equal("journal_already_sealed", state.Arm(new CaptureJournalArm
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId, LeaseId = lease,
+        }, ServerId).Reason);
+        state.Revoke(new CaptureConsentRevoke
+        {
+            ProtocolVersion = 1, ServerInstanceId = ServerId,
+        }, ServerId);
+        Assert.Empty(state.CopyJournalForVerification());
+        Assert.False(state.Status().JournalSealed);
+    }
+
     private static CaptureConsentState ArmedJournal()
     {
         var state = new CaptureConsentState();

@@ -534,6 +534,30 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Seal_journal_RPC_exposes_only_verified_internal_closure()
+    {
+        var (observer, _) = CreateObserver();
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync();
+        string serverId = observer.Identity.ServerInstanceId;
+        JObject granted = await session.Client.GrantCaptureConsentAsync(
+            serverId, ["file:///C:/project/sealed.cvl"], true, false, 60);
+        string lease = (string)granted["leaseId"]!;
+        await session.Client.ArmCaptureJournalAsync(serverId, lease);
+        JObject ack = await session.Client.SealCaptureJournalAsync(serverId, lease);
+        Assert.Equal("sealed_in_memory", (string?)ack["status"]);
+        Assert.Equal("satisfied", (string?)ack["registeredInputBarrier"]);
+        Assert.True((bool)ack["internalProducerClosed"]!);
+        Assert.False((bool)ack["transportProducerClosed"]!);
+        Assert.False((bool)ack["durableCheckpointAvailable"]!);
+        Assert.True((bool)(await session.Client.GetCaptureConsentStatusAsync())["journalSealed"]!);
+        JObject evidence = await session.Client.VerifyCaptureJournalAsync();
+        Assert.True((bool)evidence["inMemoryJournalSealed"]!);
+        Assert.False((bool)evidence["replayComplete"]!);
+        Assert.DoesNotContain("sealed.cvl", evidence.ToString());
+    }
+
+    [Fact]
     public async Task Read_barrier_checkpoint_is_explicitly_not_producer_closure()
     {
         var (observer, _) = CreateObserver();

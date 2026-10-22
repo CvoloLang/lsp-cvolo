@@ -473,6 +473,7 @@ internal sealed class LanguageServer(
                         revokeCaptureConsent = RecordingControlPlane.RevokeConsentMethod,
                         getCaptureConsentStatus = RecordingControlPlane.ConsentStatusMethod,
                         armCaptureJournal = RecordingControlPlane.ArmJournalMethod,
+                        sealCaptureJournal = RecordingControlPlane.SealJournalMethod,
                         verifyCaptureJournal = RecordingControlPlane.VerifyJournalMethod,
                         verifyCaptureCheckpoint = RecordingControlPlane.VerifyCheckpointMethod,
                         flightRecorderSnapshot = RecordingControlPlane.FlightSnapshotMethod,
@@ -571,6 +572,34 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.ArmJournalMethod, UseSingleObjectParameterDeserialization = true)]
     public CaptureJournalAck ArmCaptureJournal(CaptureJournalArm? request)
         => RecordingControl.ArmCaptureJournal(request, _state.InitializeReceived);
+
+    /// <summary>
+    /// Bounded drain of previously registered inputs then atomic closure of
+    /// the consented RAM journal. No transport completeness or durability claim.
+    /// </summary>
+    [JsonRpcMethod(RecordingControlPlane.SealJournalMethod,
+        UseSingleObjectParameterDeserialization = true)]
+    public async Task<CaptureJournalSealAck> SealCaptureJournalAsync(
+        CaptureJournalSeal? request, CancellationToken cancellationToken)
+    {
+        IngressSequence requestIngress = IngressScope.Current;
+        OrderedInputQueue? queue = Ingress?.Inputs;
+        if (queue is null || requestIngress.IsNone)
+            return new(RecordingControlPlane.Version, "rejected",
+                "input_barrier_unavailable", false, 0, 0,
+                false, false, false, "unavailable");
+
+        BarrierOutcome barrier = await queue.WaitForInputsBeforeAsync(
+            requestIngress, TimeSpan.FromSeconds(2), cancellationToken)
+            .ConfigureAwait(false);
+        if (barrier != BarrierOutcome.Satisfied)
+            return new(RecordingControlPlane.Version, "rejected",
+                barrier == BarrierOutcome.TimedOut ? "input_barrier_timed_out" : "input_barrier_completed",
+                false, 0, 0, false, false, false,
+                barrier == BarrierOutcome.TimedOut ? "timed_out" : "completed");
+        return RecordingControl.SealCaptureJournal(request, _state.InitializeReceived)
+            with { RegisteredInputBarrier = "satisfied" };
+    }
 
     [JsonRpcMethod(RecordingControlPlane.VerifyJournalMethod)]
     public CaptureReplayEvidence VerifyCaptureJournal()

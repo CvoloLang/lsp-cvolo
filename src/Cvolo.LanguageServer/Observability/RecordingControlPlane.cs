@@ -20,6 +20,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string RevokeConsentMethod = "cvolo/observability/revokeCaptureConsent.v1";
     internal const string ConsentStatusMethod = "cvolo/observability/captureConsentStatus.v1";
     internal const string ArmJournalMethod = "cvolo/observability/armCaptureJournal.v1";
+    internal const string SealJournalMethod = "cvolo/observability/sealCaptureJournal.v1";
     internal const string VerifyJournalMethod = "cvolo/observability/verifyCaptureJournal.v1";
     internal const string VerifyCheckpointMethod = "cvolo/observability/verifyCaptureCheckpoint.v1";
     internal const string FlightSnapshotMethod = "cvolo/observability/flightRecorderSnapshot.v1";
@@ -284,6 +285,18 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
                     !initialized ? "server_not_initialized" : "observer_unavailable",
                     false, 0, 0, false, false);
             return _captureConsent.Arm(request, _runtime.Identity.ServerInstanceId);
+        }
+    }
+
+    internal CaptureJournalSealAck SealCaptureJournal(CaptureJournalSeal? request, bool initialized)
+    {
+        lock (_gate)
+        {
+            if (!initialized || _runtime is null)
+                return new(Version, "rejected",
+                    !initialized ? "server_not_initialized" : "observer_unavailable",
+                    false, 0, 0, false, false, false, "not_checked");
+            return _captureConsent.Seal(request, _runtime.Identity.ServerInstanceId);
         }
     }
 
