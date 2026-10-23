@@ -41,3 +41,34 @@ The \`measured.json\` file has a \`schemaVersion=1\`, \`evidenceKind=measured\`,
 \`buildSha\`, \`sdk\`, \`host {os,cpu,runnerId}\`, and \`runs\`: each
 contains \`repetition\`, \`modeOrder\` and \`samplesUs\` arrays by mode.
 Synthetic records must not be submitted as benchmark evidence.
+
+
+## Real LSP measurements — available modes (explicit opt-in)
+
+The standalone \`collect_inc33_lsp_perf.py\` can drive a **real built server
+process** over stdio and collect actual client-observed completion round trips.
+It creates its own temporary Cvolo project, checks embedded server commit
+provenance, rotates mode order across repetitions, starts a fresh process for
+each run/mode, warms up completion, and captures the latency of successful
+JSON-RPC responses using a monotonic clock.
+
+\`\`\`bash
+python tools/collect_inc33_lsp_perf.py \
+  --server src/Cvolo.LanguageServer/bin/Release/net10.0/cvolo-language-server.dll \
+  --output test-evidence/real-lsp-completion.json \
+  --report test-evidence/real-lsp-completion-result.json
+\`\`\`
+
+Default: eight repetitions, 50 samples per available mode per repetition,
+ten warmups, 20-second RPC timeout. The server build must embed a full
+40-character commit SHA; unverifiable binaries are rejected. The benchmark
+does not read user source files or enable sensitive capture. It does not use
+\`--verbose\` and discards RPC/stderr text rather than writing sources to logs.
+
+**Important:** Current \`setRecording.v1\` deliberately rejects \`repro\`.
+The collector therefore measures ONLY \`off/basic/detailed\`, and the v4.1
+four-mode evaluator reports **INCONCLUSIVE** for missing repro instead of a
+fabricated PASS. Measurements on uncontrolled workstations are exploratory;
+there is no approved baseline or end-to-end regression PASS. Future work
+must add actual consented \`repro\` measurement, workloads other than
+completion, and controlled host/GC/CPU/memory evidence before acceptance.
