@@ -21,8 +21,11 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 	private static readonly AsyncLocal<string?> RequestUidContext = new();
 	internal static string? CurrentRequestUid => RequestUidContext.Value;
 
+	private static readonly KeyValuePair<string, string>[] ResponseAttributes =
+		[new("method", "response")];
+
 	private readonly ICompilerObserver _observer;
-	private readonly ConcurrentDictionary<string, string> _pendingRequestUids = new(StringComparer.Ordinal);
+	private readonly ConcurrentDictionary<CorrelationKey, string> _pendingRequestUids = new();
 	private string? _serverInstanceId;
 	private long _requestCounter;
 	private JsonRpc? _rpc;
@@ -127,10 +130,7 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 			Outcome = success ? "success" : "error",
 			RequestUid = requestUid,
 			RpcRequestId = ToRpcRequestId(requestId),
-			Attributes =
-			[
-				new("method", "response"),
-			],
+			Attributes = ResponseAttributes,
 		});
 	}
 
@@ -175,12 +175,15 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 	private void OnResponseSent(object? sender, JsonRpcResponseEventArgs args)
 		=> OnResponseSent(args.RequestId, args.IsSuccessfulResponse);
 
-	private static string KeyOf(RequestId id)
+	// Use a typed value key: no temporary formatted strings on every
+	// receive/dispatch/response lookup. The tag ensures JSON-RPC numeric
+	// request 123 is never confused with string request "123".
+	private readonly record struct CorrelationKey(long Number, string? Text, bool IsNumber);
+
+	private static CorrelationKey KeyOf(RequestId id)
 		=> id.Number is { } number
-			? $"n:{number}"
-			: id.String is { } text
-				? $"s:{text}"
-				: "empty";
+			? new CorrelationKey(number, null, true)
+			: new CorrelationKey(0, id.String, false);
 
 	private static RpcRequestId ToRpcRequestId(RequestId id)
 		=> id.Number is { } number
