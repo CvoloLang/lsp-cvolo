@@ -46,7 +46,9 @@ internal sealed class FlightCheckpointStore
                 long prior = 0;
                 foreach (var e in snapshot.Events)
                 {
-                    if (e.Sequence <= prior || !IsKnownEvent(e))
+                    if (e.Sequence <= prior || !IsKnownEvent(new FlightCheckpointEvent(
+                    e.Sequence, e.ObservedAtUtc, e.Kind, e.Stage,
+                    e.IngressSequence, e.Outcome)))
                         return Fail("unsafe_or_invalid_event");
                     prior = e.Sequence;
                     events.Add(new(e.Sequence, e.ObservedAtUtc, e.Kind, e.Stage,
