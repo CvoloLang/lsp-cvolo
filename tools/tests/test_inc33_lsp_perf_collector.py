@@ -52,6 +52,30 @@ class RealCollectorContractTests(unittest.TestCase):
         with self.assertRaisesRegex(collector.BenchmarkFailure, "invalid_exploratory_samples"):
             collector.exploratory_summary(record)
 
+    def test_debounce_free_document_symbol_workload_is_explicit(self):
+        self.assertEqual(("completion", "document_symbol"), collector.WORKLOADS)
+        method, params = collector.workload_request(
+            "document_symbol", "file:///synthetic/main.cvl")
+        self.assertEqual("textDocument/documentSymbol", method)
+        self.assertEqual({"textDocument": {"uri": "file:///synthetic/main.cvl"}}, params)
+        self.assertTrue(collector.valid_workload_result("document_symbol", []))
+        self.assertFalse(collector.valid_workload_result("document_symbol", None))
+        self.assertFalse(collector.valid_workload_result("completion", []))
+
+    def test_unsupported_workload_rejected_before_server_start(self):
+        with self.assertRaisesRegex(collector.BenchmarkFailure,
+                                    "unsupported_benchmark_workload"):
+            collector.collect(["does-not-exist"], workload="fabricated")
+
+    def test_failure_report_is_classified_and_hides_paths(self):
+        error = collector.BenchmarkFailure(
+            "C:/Users/private/path/file.cvl and source contents")
+        report = collector.incomplete_collection_evidence(error)
+        self.assertEqual("INCONCLUSIVE", report["status"])
+        self.assertFalse(report["endToEndRegressionGatePassed"])
+        self.assertTrue(report["noMeasuredSamplesPublished"])
+        self.assertNotIn("private", json.dumps(report))
+
     def test_header_delimited_frame_parser(self):
         payload = {"jsonrpc": "2.0", "id": 1, "result": {"x": 4}}
         self.assertEqual(payload, collector.read_frame(io.BytesIO(collector.frame(payload))))
