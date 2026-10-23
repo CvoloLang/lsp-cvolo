@@ -1,6 +1,12 @@
 name: Inc 3.3 exploratory LSP performance
 
 on:
+  # The workflow is currently developed outside the default branch.
+  # Opt-in benchmark branches are an explicit push-triggered entry point;
+  # ordinary develop/master pushes do NOT run expensive measurements.
+  push:
+    branches:
+      - 'benchmarks/inc33-*'
   workflow_dispatch:
     inputs:
       repetitions:
@@ -63,8 +69,8 @@ jobs:
         run: |
           python tools/collect_inc33_lsp_perf.py \
             --server src/Cvolo.LanguageServer/bin/Release/net10.0/cvolo-language-server.dll \
-            --repetitions ${{ inputs.repetitions }} \
-            --samples ${{ inputs.samples }} \
+            --repetitions ${{ inputs.repetitions || '8' }} \
+            --samples ${{ inputs.samples || '50' }} \
             --output test-evidence/real-lsp-completion.json \
             --report test-evidence/real-lsp-completion-result.json
           python -c "import json; p=json.load(open('test-evidence/real-lsp-completion-result.json')); assert p['status']=='INCONCLUSIVE' and p['reason']=='missing_or_duplicated_mode' and not p['endToEndRegressionGatePassed']"
