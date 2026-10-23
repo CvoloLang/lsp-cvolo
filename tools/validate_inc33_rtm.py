@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parent
 MATRIX = PROJECT_ROOT / "acceptance" / "inc33-rtm.json"
 REPO_ROOT = PROJECT_ROOT.parent
 VALID_STATES = {"implemented_test", "open"}
