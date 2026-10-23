@@ -21,9 +21,6 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 	private static readonly AsyncLocal<string?> RequestUidContext = new();
 	internal static string? CurrentRequestUid => RequestUidContext.Value;
 
-	private static readonly KeyValuePair<string, string>[] ResponseAttributes =
-		[new("method", "response")];
-
 	private readonly ICompilerObserver _observer;
 	private readonly ConcurrentDictionary<CorrelationKey, string> _pendingRequestUids = new();
 	private string? _serverInstanceId;
@@ -130,7 +127,10 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 			Outcome = success ? "success" : "error",
 			RequestUid = requestUid,
 			RpcRequestId = ToRpcRequestId(requestId),
-			Attributes = ResponseAttributes,
+			Attributes =
+			[
+				new("method", "response"),
+			],
 		});
 	}
 
