@@ -131,6 +131,69 @@ class RealCollectorContractTests(unittest.TestCase):
                                     "benchmark_document_open_rejected"):
             collector.wait_for_document_applied(rejected, 2)
 
+    def test_cumulative_resource_delta_and_signed_memory_gauges(self):
+        def snapshot(ticks, cpu, allocated, gc0, working_set):
+            return {
+                "protocolVersion": 1,
+                "scope": "same_process_cumulative_non_atomic",
+                "monotonicTicks": ticks,
+                "monotonicFrequency": 10_000_000,
+                "processCpuTimeTicks": cpu,
+                "totalAllocatedBytes": allocated,
+                "managedHeapBytes": 70000 + ticks // 100,
+                "workingSetBytes": working_set,
+                "gen0Collections": gc0,
+                "gen1Collections": 0,
+                "gen2Collections": 0,
+                "resourceAttributionToRequestProven": False,
+                "isolatedCpuMeasurementProven": False,
+                "peakMemoryObserved": False,
+            }
+        before = snapshot(10000, 30000, 100000, 2, 4000000)
+        after = snapshot(1010000, 80000, 200000, 3, 3900000)
+        result = collector.resource_deltas(before, after, 50)
+        self.assertEqual(100000, result["totalAllocatedBytesDelta"])
+        self.assertEqual(2000, result["allocatedBytesPerRequest"])
+        self.assertEqual(1, result["gen0CollectionsDelta"])
+        self.assertEqual(4000000, result["workingSetBytesBefore"])
+        self.assertEqual(3900000, result["workingSetBytesAfter"])
+        self.assertFalse(result["peakMemoryObserved"])
+        self.assertFalse(result["regressionBudgetPass"])
+        self.assertEqual("process_wide_not_per_request", result["attribution"])
+
+    def test_resource_provenance_and_non_monotonic_counters_fail_closed(self):
+        snap = {
+            "protocolVersion": 1,
+            "scope": "same_process_cumulative_non_atomic",
+            "monotonicTicks": 100000,
+            "monotonicFrequency": 10000000,
+            "processCpuTimeTicks": 900000,
+            "totalAllocatedBytes": 250000,
+            "managedHeapBytes": 50000,
+            "workingSetBytes": 5000000,
+            "gen0Collections": 2,
+            "gen1Collections": 0,
+            "gen2Collections": 0,
+            "resourceAttributionToRequestProven": False,
+            "isolatedCpuMeasurementProven": False,
+            "peakMemoryObserved": False,
+        }
+        future = dict(snap, monotonicTicks=200000)
+        for name, bad in (
+            ("totalAllocatedBytes", 200000),
+            ("processCpuTimeTicks", 300000),
+            ("gen0Collections", 1),
+            ("workingSetBytes", "private source"),
+            ("monotonicFrequency", 0),
+            ("resourceAttributionToRequestProven", True),
+        ):
+            modified = dict(future, **{name: bad})
+            with self.subTest(field=name):
+                with self.assertRaises(collector.BenchmarkFailure):
+                    collector.resource_deltas(snap, modified, 50)
+        with self.assertRaises(collector.BenchmarkFailure):
+            collector.resource_deltas(snap, future, 0)
+
     def test_duplicate_content_length_is_rejected(self):
         sample = b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}"
         with self.assertRaises(collector.BenchmarkFailure):
