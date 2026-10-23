@@ -483,6 +483,7 @@ internal sealed class LanguageServer(
                         flightCheckpointRecovery = RecordingControlPlane.FlightCheckpointRecoveryMethod,
                         flightPerformanceReport = RecordingControlPlane.FlightPerformanceMethod,
                         flightCausalReport = RecordingControlPlane.FlightCausalMethod,
+                        documentTransportAudit = RecordingControlPlane.DocumentTransportAuditMethod,
                         triggerFlightRecorder = RecordingControlPlane.FlightTriggerMethod,
                         flightRecorderMetadataOnly = true,
                         inMemoryCaptureJournalSupported = true,
@@ -660,6 +661,14 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.FlightCausalMethod)]
     public FlightCausalEvidence GetFlightCausalReport()
         => RecordingControl.InspectFlightCausality();
+
+    /// <summary>
+    /// Independent unscoped metadata-only read/handler/settlement counters.
+    /// Does not establish source frame identity or transport producer closure.
+    /// </summary>
+    [JsonRpcMethod(RecordingControlPlane.DocumentTransportAuditMethod)]
+    public DocumentTransportAuditEvidence GetDocumentTransportAudit()
+        => RecordingControl.InspectDocumentTransportAudit();
 
     /// <summary>Explicit incident marker, usable while normal recording is off.</summary>
     [JsonRpcMethod(RecordingControlPlane.FlightTriggerMethod,

@@ -31,6 +31,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string FlightCheckpointRecoveryMethod = "cvolo/observability/flightCheckpointRecovery.v1";
     internal const string FlightPerformanceMethod = "cvolo/observability/flightPerformanceReport.v1";
     internal const string FlightCausalMethod = "cvolo/observability/flightCausalReport.v1";
+    internal const string DocumentTransportAuditMethod = "cvolo/observability/documentTransportAudit.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
@@ -38,6 +39,10 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     private readonly CaptureConsentState _captureConsent = new();
     private readonly LspFlightRecorder _flightRecorder = new();
     private readonly FlightCheckpointStore _flightCheckpoint = new();
+    private readonly DocumentTransportAudit _documentTransportAudit = new();
+
+    internal DocumentTransportAuditEvidence InspectDocumentTransportAudit()
+        => _documentTransportAudit.Inspect();
 
     internal FlightCheckpointStatus InspectFlightCheckpoint() => _flightCheckpoint.Inspect();
     internal FlightCheckpointRecovery InspectRecoveredFlightCheckpoint()
@@ -343,6 +348,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal void CaptureSettledDocumentInput(
         Uri? uri, string kind, string outcome, int? version, long? ingressSequence)
     {
+        _documentTransportAudit.OnHandlerSettled(kind, outcome);
         _flightRecorder.OnHandlerSettled(kind, outcome, ingressSequence);
         if (outcome == "faulted")
             PersistIncidentBestEffort();
@@ -352,12 +358,14 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal void CaptureEnteredDocumentHandler(
         Uri? uri, string kind, int? version, long? ingressSequence)
     {
+        _documentTransportAudit.OnHandlerEntered(kind);
         _flightRecorder.OnHandlerEntered(kind, ingressSequence);
         _captureConsent.CaptureHandlerEntered(uri, kind, version, ingressSequence);
     }
 
     internal void ObserveTransportDocumentNotification(string method)
     {
+        _documentTransportAudit.OnTransportRead(method);
         _flightRecorder.OnTransportNotification(method);
         _captureConsent.CaptureTransportNotification(method);
     }

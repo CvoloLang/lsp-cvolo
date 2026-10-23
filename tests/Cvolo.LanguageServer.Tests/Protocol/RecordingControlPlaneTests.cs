@@ -733,6 +733,41 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Transport_audit_RPC_reports_metadata_without_claiming_frame_identity()
+    {
+        using var session = ProtocolSession.Start();
+        await session.Client.InitializeAsync();
+        var uri = new Uri("file:///C:/private/DO_NOT_RECORD.cvl");
+        await session.Client.NotifyDidChangeAsync(uri, 2,
+            new Microsoft.VisualStudio.LanguageServer.Protocol.TextDocumentContentChangeEvent
+            {
+                Text = "PRIVATE_WIRE_SOURCE",
+            });
+
+        JObject report = new();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            report = await session.Client.GetDocumentTransportAuditAsync();
+            if ((long?)report["transportReads"] >= 1
+                && (long?)report["handlerSettlements"] >= 1)
+                break;
+            await Task.Delay(10);
+        }
+        Assert.True((long?)report["transportReads"] >= 1);
+        Assert.True((long?)report["handlerSettlements"] >= 1);
+        Assert.Equal("counts_only", (string?)report["correlationLevel"]);
+        Assert.Equal("process_unscoped_metadata", (string?)report["scope"]);
+        Assert.False((bool)report["individualFrameIdentityProven"]!);
+        Assert.False((bool)report["closedTransportProducerProven"]!);
+        Assert.False((bool)report["documentReplayCompleteProven"]!);
+        Assert.False((bool)report["unmatchedCountersProveDroppedFrames"]!);
+        string json = report.ToString();
+        Assert.DoesNotContain("PRIVATE_WIRE_SOURCE", json);
+        Assert.DoesNotContain("DO_NOT_RECORD.cvl", json);
+    }
+
+    [Fact]
     public async Task Flight_causal_RPC_does_not_claim_unobserved_root_cause_or_critical_path()
     {
         using var session = ProtocolSession.Start();
