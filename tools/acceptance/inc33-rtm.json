@@ -1,0 +1,434 @@
+{
+  "schemaVersion": 1,
+  "source": "repository acceptance map, not normative Inc numbering",
+  "normativeCoverage": "unverified",
+  "notes": "Existing tests are mapped by exact source method and checked by CI; implemented_test means the test exists and participates in CI, not that a requirement is globally proven. Do not claim the normative 87 cases are fully mapped.",
+  "requirements": [
+    {
+      "id": "LSP33-CON-01",
+      "title": "TTL destroys capture scope",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Ttl_expiration_erases_scope_without_sleeping_or_granting_capture"
+      }
+    },
+    {
+      "id": "LSP33-CON-02",
+      "title": "Invalid consent cannot replace active lease",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Invalid_scope_and_overlong_ttl_do_not_replace_a_valid_lease"
+      }
+    },
+    {
+      "id": "LSP33-CON-03",
+      "title": "Only scoped document versions retained",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Journal_retains_only_scoped_versions_then_revoke_removes_source"
+      }
+    },
+    {
+      "id": "LSP33-CON-04",
+      "title": "Journal capacity remains bounded",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Journal_capacity_is_bounded_and_expiry_erases_retained_text"
+      }
+    },
+    {
+      "id": "LSP33-CON-05",
+      "title": "Journal arm requires scoped source consent",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Journal_cannot_be_armed_without_matching_lease_and_source_permission"
+      }
+    },
+    {
+      "id": "LSP33-CON-06",
+      "title": "Close outside lease retains no evidence",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Close_outside_consent_scope_and_after_revoke_never_retains_evidence"
+      }
+    },
+    {
+      "id": "LSP33-CON-07",
+      "title": "Revoke is idempotent and clears source scope",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Revoke_is_idempotent_and_clears_source_and_path_scope"
+      }
+    },
+    {
+      "id": "LSP33-RPL-01",
+      "title": "UTF-16 replay across surrogate pairs and CRLF",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Accepted_utf16_edit_batches_replay_across_surrogate_pairs_and_crlf"
+      }
+    },
+    {
+      "id": "LSP33-RPL-02",
+      "title": "Replay reports first failing version",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Mismatched_edit_replay_reports_first_failing_version"
+      }
+    },
+    {
+      "id": "LSP33-RPL-03",
+      "title": "Reopen starts new replay segment",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Reopening_document_starts_new_replay_segment_with_reset_version"
+      }
+    },
+    {
+      "id": "LSP33-RPL-04",
+      "title": "Missing edits cannot claim replay completeness",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Missing_edit_batch_is_reported_and_no_raw_edit_escapes_in_evidence"
+      }
+    },
+    {
+      "id": "LSP33-RPL-05",
+      "title": "Out-of-order inputs cannot claim complete replay",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Duplicate_ingress_and_change_after_close_are_not_claimed_complete"
+      }
+    },
+    {
+      "id": "LSP33-RPL-06",
+      "title": "Failure attribution uses known ingress order",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "First_known_failure_uses_earlier_ingress_instead_of_snapshot_iteration_order"
+      }
+    },
+    {
+      "id": "LSP33-RPL-07",
+      "title": "Seal freezes in-memory journal",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CaptureConsentStateTests.cs",
+        "method": "Sealing_freezes_capture_and_revoke_erases_sensitive_state"
+      }
+    },
+    {
+      "id": "LSP33-ZIP-01",
+      "title": "Repro ZIP source hash and replay verified",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/ReproSourceBundleTests.cs",
+        "method": "Archive_is_privately_scoped_hashed_and_independently_replayed"
+      }
+    },
+    {
+      "id": "LSP33-ZIP-02",
+      "title": "Empty capture is not exported",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/ReproSourceBundleTests.cs",
+        "method": "Empty_or_close_only_captures_are_not_valid_source_archives"
+      }
+    },
+    {
+      "id": "LSP33-ZIP-03",
+      "title": "Unknown manifest properties are rejected",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/ReproSourceBundleTests.cs",
+        "method": "Recomputed_sha_cannot_smuggle_unknown_root_or_record_fields"
+      }
+    },
+    {
+      "id": "LSP33-ZIP-04",
+      "title": "Nested sensitive manifest fields rejected",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/ReproSourceBundleTests.cs",
+        "method": "Nested_edit_metadata_must_not_accept_sensitive_unknown_properties"
+      }
+    },
+    {
+      "id": "LSP33-ZIP-05",
+      "title": "Duplicate JSON keys rejected",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/ReproSourceBundleTests.cs",
+        "method": "Duplicate_json_keys_are_rejected_even_when_manifest_hash_matches"
+      }
+    },
+    {
+      "id": "LSP33-ZIP-06",
+      "title": "Absolute raw document identifiers rejected",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/ReproSourceBundleTests.cs",
+        "method": "Recomputed_manifest_hash_does_not_authorize_raw_document_paths"
+      }
+    },
+    {
+      "id": "LSP33-ZIP-07",
+      "title": "False complete status rejected",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/ReproSourceBundleTests.cs",
+        "method": "Forged_complete_status_is_rejected_even_with_matching_manifest_hash"
+      }
+    },
+    {
+      "id": "LSP33-ZIP-08",
+      "title": "Source ZIP integrity tampering rejected",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/ReproSourceBundleTests.cs",
+        "method": "Archive_verification_detects_tampered_source_member_and_manifest"
+      }
+    },
+    {
+      "id": "LSP33-ZIP-09",
+      "title": "Lease revoke races cannot publish source ZIP",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/ReproSourceBundleTests.cs",
+        "method": "Revoked_lease_cannot_commit_even_prepared_export"
+      }
+    },
+    {
+      "id": "LSP33-FLT-01",
+      "title": "Metadata-only vocabulary restricts sensitive data",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/LspFlightRecorderTests.cs",
+        "method": "Safe_event_vocabulary_drops_arbitrary_method_and_outcome_strings"
+      }
+    },
+    {
+      "id": "LSP33-FLT-02",
+      "title": "Fault triggers in-memory flight incident",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/LspFlightRecorderTests.cs",
+        "method": "Failure_automatically_triggers_in_memory_incident"
+      }
+    },
+    {
+      "id": "LSP33-FLT-03",
+      "title": "Tampered checkpoint cannot recover",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/LspFlightRecorderTests.cs",
+        "method": "Tampered_checkpoint_is_never_reported_as_recovered"
+      }
+    },
+    {
+      "id": "LSP33-FLT-04",
+      "title": "Async reordered checkpoint honors incident order",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/LspFlightRecorderTests.cs",
+        "method": "Delayed_older_incident_cannot_replace_newer_recovery_or_status"
+      }
+    },
+    {
+      "id": "LSP33-FLT-05",
+      "title": "Concurrent fault marker adjacency",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/LspFlightRecorderTests.cs",
+        "method": "Concurrent_faults_emit_atomically_adjacent_trigger_edges"
+      }
+    },
+    {
+      "id": "LSP33-FLT-06",
+      "title": "Monotonic overlap-aware latency accounting",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/LspFlightRecorderTests.cs",
+        "method": "Performance_report_uses_monotonic_clock_and_union_of_overlapping_handlers"
+      }
+    },
+    {
+      "id": "LSP33-FLT-07",
+      "title": "Causal edges require unique lifecycle pairing",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/LspFlightRecorderTests.cs",
+        "method": "Causal_report_matches_only_unique_handler_pairs"
+      }
+    },
+    {
+      "id": "LSP33-FLT-08",
+      "title": "Injected write faults rollback invalid checkpoint",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/LspFlightRecorderTests.cs",
+        "method": "Injected_checkpoint_failure_leaves_no_partial_or_unverified_publication"
+      }
+    },
+    {
+      "id": "LSP33-FLT-09",
+      "title": "Recovery ignores partial checkpoint",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/LspFlightRecorderTests.cs",
+        "method": "Incomplete_checkpoint_partial_is_not_recovered"
+      }
+    },
+    {
+      "id": "LSP33-TRN-01",
+      "title": "Equal counts do not prove transport identity",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DocumentTransportAuditTests.cs",
+        "method": "Identical_counts_do_not_prove_correlated_frames"
+      }
+    },
+    {
+      "id": "LSP33-TRN-02",
+      "title": "In-flight frames not declared lost",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DocumentTransportAuditTests.cs",
+        "method": "Unsettled_or_undispatched_frame_is_not_declared_lost"
+      }
+    },
+    {
+      "id": "LSP33-TRN-03",
+      "title": "Counters signal overflow",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DocumentTransportAuditTests.cs",
+        "method": "Bounded_counters_saturate_with_explicit_incomplete_flag"
+      }
+    },
+    {
+      "id": "LSP33-TRN-04",
+      "title": "Concurrent transport counters bounded",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DocumentTransportAuditTests.cs",
+        "method": "Parallel_notifications_preserve_bounded_process_counts"
+      }
+    },
+    {
+      "id": "LSP33-EXP-01",
+      "title": "Raw request identity does not automatically flow to target",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RequestIdCorrelationExperimentTests.cs",
+        "method": "Handler_cannot_observe_the_ambient_request_id_through_read_async_async_local"
+      }
+    },
+    {
+      "id": "LSP33-EXP-02",
+      "title": "Derived transport observer preserves read loop",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RequestIdCorrelationExperimentTests.cs",
+        "method": "Derived_observing_handler_accepts_a_second_request"
+      }
+    },
+    {
+      "id": "LSP33-RPC-01",
+      "title": "Real source ZIP RPC and explicit confirmation",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RecordingControlPlaneTests.cs",
+        "method": "Private_repro_export_requires_second_confirmation_and_publishes_integrity_manifest"
+      }
+    },
+    {
+      "id": "LSP33-RPC-02",
+      "title": "Rejected didOpen cannot produce source ZIP",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RecordingControlPlaneTests.cs",
+        "method": "Rejected_document_open_cannot_create_a_source_repro_archive"
+      }
+    },
+    {
+      "id": "LSP33-RPC-03",
+      "title": "Causal RPC never invents root cause",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RecordingControlPlaneTests.cs",
+        "method": "Flight_causal_RPC_does_not_claim_unobserved_root_cause_or_critical_path"
+      }
+    },
+    {
+      "id": "LSP33-RPC-04",
+      "title": "Transport RPC disclaims identity",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RecordingControlPlaneTests.cs",
+        "method": "Transport_audit_RPC_reports_metadata_without_claiming_frame_identity"
+      }
+    },
+    {
+      "id": "LSP33-GAP-01",
+      "title": "Transport frame identity preserved through dispatch and handler",
+      "state": "open",
+      "blocking_reason": "Await an explicit transport-to-target context without FIFO guessing"
+    },
+    {
+      "id": "LSP33-GAP-02",
+      "title": "Transport producer closure with validated complete input history",
+      "state": "open",
+      "blocking_reason": "Raw transport closure and admitted-handler accounting not proven"
+    },
+    {
+      "id": "LSP33-GAP-03",
+      "title": "Full document replay completeness claim",
+      "state": "open",
+      "blocking_reason": "Cannot assert while transport identity and closure remain open"
+    },
+    {
+      "id": "LSP33-GAP-04",
+      "title": "End-to-end causal critical path",
+      "state": "open",
+      "blocking_reason": "Only local handler lifecycle edges are directly proven"
+    },
+    {
+      "id": "LSP33-GAP-05",
+      "title": "Performance baseline and quantitative regression budget",
+      "state": "open",
+      "blocking_reason": "Monotonic analyzer correctness is tested, no reproducible baseline yet"
+    },
+    {
+      "id": "LSP33-GAP-06",
+      "title": "CLI and installed VSIX acceptance",
+      "state": "open",
+      "blocking_reason": "Integration acceptance not mapped or completed"
+    },
+    {
+      "id": "LSP33-GAP-07",
+      "title": "Complete normative 87-case Inc RTM",
+      "state": "open",
+      "blocking_reason": "Original normative IDs, cases and acceptance details must be cross-checked against authoritative Inc text"
+    },
+    {
+      "id": "LSP33-GAP-08",
+      "title": "Final security and architecture review",
+      "state": "open",
+      "blocking_reason": "Outstanding proof boundaries require final review"
+    }
+  ]
+}
