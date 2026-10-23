@@ -131,6 +131,41 @@ class RealCollectorContractTests(unittest.TestCase):
                                     "benchmark_document_open_rejected"):
             collector.wait_for_document_applied(rejected, 2)
 
+    def test_exploratory_process_summary_never_claims_per_request_resource_causality(self):
+        fake = {"runs": [
+            {"processResourceDeltas": {
+                mode: {
+                    "attribution": "process_wide_not_per_request",
+                    "regressionBudgetPass": False,
+                    "peakMemoryObserved": False,
+                    "allocatedBytesPerRequest": 30000 if mode == "off" else
+                        (34000 if mode == "basic" else 35000),
+                    "processCpuUsPerRequest": 500 if mode == "off" else 550,
+                    "gen0CollectionsDelta": 0,
+                    "gen1CollectionsDelta": 0,
+                    "gen2CollectionsDelta": 0,
+                } for mode in collector.MODES
+            }} for _ in range(8)
+        ]}
+        result = collector.exploratory_resource_summary(fake)
+        self.assertEqual("descriptive_only", result["status"])
+        self.assertFalse(result["normativeBudgetPass"])
+        self.assertFalse(result["peakMemoryObserved"])
+        self.assertEqual("process_wide_not_per_request", result["scope"])
+        self.assertEqual(13.33,
+            result["perMode"]["basic"]["observedAllocationDeltaPercent"])
+        self.assertEqual(35000,
+            result["perMode"]["detailed"]["medianAllocatedBytesPerRequest"])
+
+    def test_resource_summary_incomplete_runs_are_rejected_and_absence_is_labeled(self):
+        self.assertEqual("not_collected",
+            collector.exploratory_resource_summary({"runs": [{"samplesUs": {}}]})["status"])
+        with self.assertRaisesRegex(collector.BenchmarkFailure,
+                                    "incomplete_resource_evidence"):
+            collector.exploratory_resource_summary({"runs": [
+                {"processResourceDeltas": {}}, {"samplesUs": {}}
+            ]})
+
     def test_cumulative_resource_delta_and_signed_memory_gauges(self):
         def snapshot(ticks, cpu, allocated, gc0, working_set):
             return {
