@@ -30,6 +30,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string FlightCheckpointStatusMethod = "cvolo/observability/flightCheckpointStatus.v1";
     internal const string FlightCheckpointRecoveryMethod = "cvolo/observability/flightCheckpointRecovery.v1";
     internal const string FlightPerformanceMethod = "cvolo/observability/flightPerformanceReport.v1";
+    internal const string FlightResourceMethod = "cvolo/observability/flightResourceSnapshot.v1";
     internal const string FlightCausalMethod = "cvolo/observability/flightCausalReport.v1";
     internal const string DocumentTransportAuditMethod = "cvolo/observability/documentTransportAudit.v1";
 

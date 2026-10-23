@@ -786,6 +786,26 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Resource_snapshot_RPC_exposes_process_metrics_without_claiming_request_attribution()
+    {
+        using var session = ProtocolSession.Start();
+        await session.Client.InitializeAsync();
+        JObject first = await session.Client.GetFlightResourceSnapshotAsync();
+        JObject second = await session.Client.GetFlightResourceSnapshotAsync();
+        Assert.Equal("same_process_cumulative_non_atomic", (string?)first["scope"]);
+        Assert.Equal(1, (int)first["protocolVersion"]!);
+        Assert.True((long)first["monotonicFrequency"]! > 0);
+        Assert.True((long)first["workingSetBytes"]! > 0);
+        Assert.True((long)second["monotonicTicks"]! >= (long)first["monotonicTicks"]!);
+        Assert.True((long)second["totalAllocatedBytes"]! >= (long)first["totalAllocatedBytes"]!);
+        Assert.True((long)second["processCpuTimeTicks"]! >= (long)first["processCpuTimeTicks"]!);
+        Assert.False((bool)first["resourceAttributionToRequestProven"]!);
+        Assert.False((bool)first["isolatedCpuMeasurementProven"]!);
+        Assert.False((bool)first["peakMemoryObserved"]!);
+        Assert.DoesNotContain("file:///", first.ToString());
+    }
+
+    [Fact]
     public async Task Flight_performance_RPC_exposes_monotonic_limited_metadata()
     {
         using var session = ProtocolSession.Start();

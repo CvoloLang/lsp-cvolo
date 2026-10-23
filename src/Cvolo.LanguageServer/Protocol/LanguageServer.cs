@@ -482,6 +482,7 @@ internal sealed class LanguageServer(
                         flightCheckpointStatus = RecordingControlPlane.FlightCheckpointStatusMethod,
                         flightCheckpointRecovery = RecordingControlPlane.FlightCheckpointRecoveryMethod,
                         flightPerformanceReport = RecordingControlPlane.FlightPerformanceMethod,
+                        flightResourceSnapshot = RecordingControlPlane.FlightResourceMethod,
                         flightCausalReport = RecordingControlPlane.FlightCausalMethod,
                         documentTransportAudit = RecordingControlPlane.DocumentTransportAuditMethod,
                         triggerFlightRecorder = RecordingControlPlane.FlightTriggerMethod,
@@ -653,6 +654,11 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.FlightPerformanceMethod)]
     public FlightPerformanceEvidence GetFlightPerformanceReport()
         => RecordingControl.InspectFlightPerformance();
+
+    /// <summary>Process-wide cumulative resource counters, not per-RPC attribution.</summary>
+    [JsonRpcMethod(RecordingControlPlane.FlightResourceMethod)]
+    public FlightResourceSnapshot GetFlightResourceSnapshot()
+        => FlightResourceSampler.Capture();
 
     /// <summary>
     /// Only confirmed same-process handler lifecycles and automatic trigger
