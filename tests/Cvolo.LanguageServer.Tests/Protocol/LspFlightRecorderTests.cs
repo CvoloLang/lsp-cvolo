@@ -403,6 +403,87 @@ public sealed class LspFlightRecorderTests
         Assert.False(report.TransportToHandlerCorrelationProven);
     }
 
+    [Theory]
+    [InlineData("after_temporary_flush")]
+    [InlineData("after_publish_before_verify")]
+    public void Injected_checkpoint_failure_leaves_no_partial_or_unverified_publication(string stage)
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "cvolo-flight-injected-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var recorder = new LspFlightRecorder();
+            recorder.OnHandlerSettled("did_change", "faulted", 11);
+            var store = new FlightCheckpointStore(directory,
+                writeFaultInjection: step =>
+                {
+                    if (step == stage)
+                        throw new IOException("simulated checkpoint I/O fault");
+                });
+            var result = store.Write(recorder.Inspect());
+            Assert.Equal("failed", result.Status);
+            Assert.Equal("checkpoint_io_failed", result.FailureReason);
+            Assert.False(result.VerifiedAfterWrite);
+            Assert.Empty(Directory.GetFiles(directory, "*.json"));
+            Assert.Empty(Directory.GetFiles(directory, "*.partial"));
+            Assert.Equal("no_checkpoint",
+                new FlightCheckpointStore(directory).RecoverLatest().Status);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Injected_failure_does_not_erase_last_verified_checkpoint()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "cvolo-flight-last-good-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var recorder = new LspFlightRecorder();
+            recorder.OnHandlerSettled("did_open", "faulted", 1);
+            int publishes = 0;
+            var store = new FlightCheckpointStore(directory,
+                writeFaultInjection: stage =>
+                {
+                    if (stage == "after_publish_before_verify"
+                        && ++publishes == 2)
+                        throw new IOException("simulated newer checkpoint failure");
+                });
+            var first = store.Write(recorder.Inspect());
+            Assert.True(first.VerifiedAfterWrite);
+            recorder.OnHandlerSettled("did_close", "faulted", 2);
+            var second = store.Write(recorder.Inspect());
+            Assert.Equal("checkpoint_io_failed", second.FailureReason);
+            Assert.False(second.FilePublished);
+            Assert.Equal(first.IncidentId, store.Inspect().IncidentId);
+            Assert.True(store.Inspect().VerifiedAfterWrite);
+            Assert.Single(Directory.GetFiles(directory, "*.json"));
+            Assert.Empty(Directory.GetFiles(directory, "*.partial"));
+            var recovered = new FlightCheckpointStore(directory).RecoverLatest();
+            Assert.True(recovered.ValidCheckpointRecovered);
+            Assert.Equal(first.IncidentId, recovered.IncidentId);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Incomplete_checkpoint_partial_is_not_recovered()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "cvolo-flight-partial-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "flight-incomplete.json.partial"),
+                "{partial");
+            var recovered = new FlightCheckpointStore(directory).RecoverLatest();
+            Assert.Equal("no_checkpoint", recovered.Status);
+            Assert.False(recovered.ValidCheckpointRecovered);
+            Assert.False(recovered.AllProcessHistoryRecovered);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [Fact]
     public void Ring_is_bounded_and_reports_overwritten_prefix()
     {

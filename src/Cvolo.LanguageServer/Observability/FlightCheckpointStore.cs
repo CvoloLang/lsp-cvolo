@@ -15,6 +15,9 @@ internal sealed class FlightCheckpointStore
     internal const int MaxFiles = 8;
     private readonly string _directory;
     private readonly object _gate = new();
+    // Optional deterministic fault injection for tests only. The production
+    // path is null: no caller-controlled filenames or untrusted data.
+    private readonly Action<string>? _writeFaultInjection;
     // The per-process prefix is fixed at construction; the incident's
     // monotonic event ordinal (not Task.Run completion time) orders files
     // within that process. Across processes, UTC clock ordering is only
@@ -27,8 +30,10 @@ internal sealed class FlightCheckpointStore
     private long _latestPublishedSequence;
 
     internal FlightCheckpointStore(string? directory = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        Action<string>? writeFaultInjection = null)
     {
+        _writeFaultInjection = writeFaultInjection;
         _directory = directory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Cvolo", "FlightRecorder");
@@ -42,6 +47,7 @@ internal sealed class FlightCheckpointStore
         lock (_gate)
         {
             string? temporary = null;
+            string? unverifiedPublication = null;
             try
             {
                 if (snapshot.IncidentId is null || !snapshot.TriggerRetained
@@ -107,16 +113,21 @@ internal sealed class FlightCheckpointStore
                     output.Write(checkpoint);
                     output.Flush(flushToDisk: true);
                 }
+                _writeFaultInjection?.Invoke("after_temporary_flush");
                 File.Move(temporary, file);
                 temporary = null;
+                unverifiedPublication = file;
+                _writeFaultInjection?.Invoke("after_publish_before_verify");
                 // Validate the PUBLISHED FILE, not merely the serialized
                 // in-memory bytes before writing. This is still not a
                 // directory-fsync or sudden-power-loss guarantee.
                 if (!Validate(File.ReadAllBytes(file)))
                 {
                     File.Delete(file);
+                    unverifiedPublication = null;
                     return Fail("published_checkpoint_verification_failed");
                 }
+                unverifiedPublication = null;
                 Prune();
                 // An older Task.Run completing after a newer one must not
                 // regress the observable status of the most recent incident.
@@ -138,9 +149,19 @@ internal sealed class FlightCheckpointStore
             }
             finally
             {
+                // A handled I/O fault before the published bytes are verified
+                // must leave neither a stray partial file nor an unverified
+                // committed JSON checkpoint. Crash recovery only trusts fully
+                // validated .json files; it intentionally ignores .partial.
                 if (temporary is not null)
                 {
                     try { File.Delete(temporary); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                }
+                if (unverifiedPublication is not null)
+                {
+                    try { File.Delete(unverifiedPublication); }
                     catch (IOException) { }
                     catch (UnauthorizedAccessException) { }
                 }

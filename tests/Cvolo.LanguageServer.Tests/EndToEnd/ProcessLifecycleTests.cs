@@ -4,6 +4,13 @@ using Xunit;
 
 namespace Cvolo.LanguageServer.Tests.EndToEnd;
 
+// Process startup and forced termination are unusually sensitive to worker
+// saturation under Windows CI. Run this collection without concurrent test
+// collections while preserving the actual server-process E2E assertions.
+[CollectionDefinition("IsolatedProcessLifecycle", DisableParallelization = true)]
+public sealed class IsolatedProcessLifecycleCollection;
+
+[Collection("IsolatedProcessLifecycle")]
 public class ProcessLifecycleTests
 {
     [Fact]
