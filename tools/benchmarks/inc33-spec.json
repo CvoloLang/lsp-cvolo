@@ -27,6 +27,7 @@
     "cold_start",
     "warm_cache",
     "did_change_100",
+    "document_symbol",
     "completion",
     "definition",
     "semantic_tokens",
