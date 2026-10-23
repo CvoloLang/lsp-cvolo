@@ -383,6 +383,24 @@
       }
     },
     {
+      "id": "LSP33-RPC-05",
+      "title": "Numeric and text protocol IDs with identical digits retain distinct correlation",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RpcBoundaryObservabilityTests.cs",
+        "method": "Numeric_and_string_request_ids_with_same_digits_never_share_correlation"
+      }
+    },
+    {
+      "id": "LSP33-RPC-06",
+      "title": "Tracing emits no additional JSON-RPC stdout protocol bytes",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RpcBoundaryObservabilityTests.cs",
+        "method": "Instrumentation_adds_no_bytes_to_the_protocol_stream"
+      }
+    },
+    {
       "id": "LSP33-GAP-01",
       "title": "Transport frame identity preserved through dispatch and handler",
       "state": "open",

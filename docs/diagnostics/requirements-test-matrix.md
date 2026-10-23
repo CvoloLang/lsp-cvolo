@@ -4,7 +4,7 @@ Generated from `tools/acceptance/inc33-normative-rtm.json` (the source of truth)
 The 68 §45 scenarios plus 19 §65 scenarios are a **complete ID inventory**, NOT completed acceptance.
 A linked test alone establishes only partial coverage. `PASS` requires test/evidence/build/platform provenance and the release gate.
 
-**Inventory:** 87 scenarios · 0 PASS · 18 PARTIAL · 69 BLOCKED · 0 FAIL.
+**Inventory:** 87 scenarios · 0 PASS · 20 PARTIAL · 67 BLOCKED · 0 FAIL.
 
 | Requirement | Section | Component | Status | Existing test links | Scenario | Normative oracle |
 |---|---|---|---|---|---|---|
@@ -51,8 +51,8 @@ A linked test alone establishes only partial coverage. `PASS` requires test/evid
 | OBS-LSP-005 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPL-01`, `LSP33-RPL-03`, `LSP33-RPL-05` | DidOpen/DidChange/DidClose/DidSave и смешанные edits | Серверная последовательность, версии и text hashes соответствуют inputs; old snapshot не объявлен current |
 | OBS-LSP-006 | §45.4 | LanguageServer | BLOCKED | — | Diagnostics publish/clear, generation changes, stale commit | Только разрешённые публикации; отправка, failure и suppression различаются |
 | OBS-LSP-007 | §45.4 | LanguageServer | BLOCKED | — | Completion/hover/signature/rename/references/tokens/inlay/other handlers | Каждая feature имеет trace и expected payload; outcome/reason даже при `null` |
-| OBS-LSP-008 | §45.4 | LanguageServer | BLOCKED | — | Concurrent JSON-RPC requests с числовым и строковым id | Нет перепутывания request IDs и trace context; не используются unsafe globals |
-| OBS-LSP-009 | §45.4 | LanguageServer | BLOCKED | — | JSON-RPC stdout hygiene при всех режимах, включая writer failure | stdout содержит только валидные framed protocol messages, tracing не добавляет bytes |
+| OBS-LSP-008 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPC-05` | Concurrent JSON-RPC requests с числовым и строковым id | Нет перепутывания request IDs и trace context; не используются unsafe globals |
+| OBS-LSP-009 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPC-06` | JSON-RPC stdout hygiene при всех режимах, включая writer failure | stdout содержит только валидные framed protocol messages, tracing не добавляет bytes |
 | OBS-LSP-010 | §45.4 | LanguageServer | BLOCKED | — | Headless LSP, startup/shutdown/restart/parent process loss | Есть new serverInstanceIds, terminal или crash-incomplete, graceful no-client handling |
 | OBS-LSP-011 | §45.4 | LanguageServer | BLOCKED | — | Динамическое переключение logging без запуска нового server | Переход наблюдаем, mode действует в неизменном PID; старые Lazy не ретроактивно описаны |
 | OBS-VSC-001 | §45.4 | VSCodeExtension | BLOCKED | — | Запуск установленного VSIX + bundled Tooling | Настоящий child process загружает все DLL, проходит initialize и F12 |

@@ -805,15 +805,17 @@
       "description": "Concurrent JSON-RPC requests с числовым и строковым id",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-RPC-05"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "Нет перепутывания request IDs и trace context; не используются unsafe globals",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Current numeric/string pairing is covered, but the complete test oracle must include parallel request trace context and broader routing evidence."
     },
     {
       "requirementId": "OBS-LSP-009",
@@ -823,15 +825,17 @@
       "description": "JSON-RPC stdout hygiene при всех режимах, включая writer failure",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-RPC-06"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "stdout содержит только валидные framed protocol messages, tracing не добавляет bytes",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Existing stdout framing test covers normal instrumented RPC; all modes including writer failure require separate evidence."
     },
     {
       "requirementId": "OBS-LSP-010",
