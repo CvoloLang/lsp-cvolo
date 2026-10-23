@@ -79,6 +79,9 @@ jobs:
       - name: Test standalone diagnostic analyzer
         run: python -m unittest discover -s tools/tests -v
 
+      - name: Validate normative Inc 3.3 87-case RTM inventory
+        run: python tools/validate_inc33_normative_rtm.py
+
       - name: Inc 3.3 performance smoke contract
         shell: bash
         run: |
