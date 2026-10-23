@@ -377,8 +377,14 @@ internal static class ReproSourceBundle
         string temporary = output + ".partial";
         try
         {
-            using (var file = new FileStream(temporary, FileMode.CreateNew,
-                FileAccess.Write, FileShare.None))
+            using (var file = new FileStream(temporary, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                UnixCreateMode = OperatingSystem.IsWindows() ? null :
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            }))
             {
                 file.Write(bundle.Bytes);
                 file.Flush(flushToDisk: true);
