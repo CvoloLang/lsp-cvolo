@@ -377,14 +377,17 @@ internal static class ReproSourceBundle
         string temporary = output + ".partial";
         try
         {
-            using (var file = new FileStream(temporary, new FileStreamOptions
+            var streamOptions = new FileStreamOptions
             {
                 Mode = FileMode.CreateNew,
                 Access = FileAccess.Write,
                 Share = FileShare.None,
-                UnixCreateMode = OperatingSystem.IsWindows() ? null :
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
-            }))
+            };
+            // Setting UnixCreateMode at all throws on Windows, even if null.
+            if (!OperatingSystem.IsWindows())
+                streamOptions.UnixCreateMode =
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            using (var file = new FileStream(temporary, streamOptions))
             {
                 file.Write(bundle.Bytes);
                 file.Flush(flushToDisk: true);
