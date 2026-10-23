@@ -44,6 +44,23 @@ class RealCollectorContractTests(unittest.TestCase):
         self.assertEqual(100, report["perMode"]["off"]["p95Us"])
         self.assertEqual(1, report["perMode"]["basic"]["observedP95DeltaPercent"])
         self.assertEqual(3, report["perMode"]["detailed"]["sampleCount"])
+        self.assertFalse(report["noisyBaseline"])
+        self.assertEqual("INCONCLUSIVE", report["observedLatencyBudgetVerdict"])
+
+    def test_noisy_short_lsp_baseline_forces_inconclusive(self):
+        raw = {
+            "runs": [
+                {"samplesUs": {
+                    "off": [100 + (25 if i % 2 else 0)],
+                    "basic": [110], "detailed": [111],
+                }} for i in range(8)
+            ],
+        }
+        report = collector.exploratory_summary(raw)
+        self.assertTrue(report["noisyBaseline"])
+        self.assertGreater(report["baselineRelativeP95RunSpread"], .08)
+        self.assertFalse(report["confidenceBoundedBudgetVerdict"])
+        self.assertEqual("INCONCLUSIVE", report["observedLatencyBudgetVerdict"])
 
     def test_exploratory_percentiles_reject_invalid_or_absent_samples(self):
         record = {"runs": [{"samplesUs": {
