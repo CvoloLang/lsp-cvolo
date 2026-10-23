@@ -86,7 +86,34 @@ jobs:
             --workload ${{ inputs.workload || 'document_symbol' }} \
             --output test-evidence/real-lsp-completion.json \
             --report test-evidence/real-lsp-completion-result.json
-          python -c "import json; p=json.load(open('test-evidence/real-lsp-completion-result.json')); assert p['status']=='INCONCLUSIVE' and p['reason']=='missing_or_duplicated_mode' and not p['endToEndRegressionGatePassed']"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          raw = json.loads(Path("test-evidence/real-lsp-completion.json").read_text())
+          result = json.loads(Path("test-evidence/real-lsp-completion-result.json").read_text())
+          assert result["status"] == "INCONCLUSIVE"
+          assert result["reason"] == "missing_or_duplicated_mode"
+          assert not result["endToEndRegressionGatePassed"]
+          assert raw["resourceSamplingScope"] == "process_wide_cpu_gc_allocation_and_two_memory_points"
+          assert raw["resourceAttributionToRequestsProven"] is False
+          modes = {"off", "basic", "detailed"}
+          assert len(raw["runs"]) >= 8
+          for run in raw["runs"]:
+              assert set(run["processResourceDeltas"]) == modes
+              for mode, evidence in run["processResourceDeltas"].items():
+                  assert evidence["attribution"] == "process_wide_not_per_request"
+                  assert evidence["regressionBudgetPass"] is False
+                  assert evidence["peakMemoryObserved"] is False
+                  assert evidence["totalAllocatedBytesDelta"] >= 0
+                  assert evidence["processCpuTimeTicksDelta"] >= 0
+          summary = result["exploratoryMeasurements"]["processResources"]
+          assert summary["status"] == "descriptive_only"
+          assert summary["scope"] == "process_wide_not_per_request"
+          assert summary["normativeBudgetPass"] is False
+          assert summary["peakMemoryObserved"] is False
+          assert set(summary["perMode"]) == modes
+          PY
       - name: Upload real-process evidence
         if: always()
         uses: actions/upload-artifact@v4
