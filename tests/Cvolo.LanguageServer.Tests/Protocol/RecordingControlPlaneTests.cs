@@ -572,6 +572,9 @@ public sealed class RecordingControlPlaneTests
         try
         {
             Assert.True(File.Exists(path));
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    File.GetUnixFileMode(path));
             byte[] bytes = await File.ReadAllBytesAsync(path);
             var verified = ReproSourceBundle.Verify(bytes, (string)ack["manifestSha256"]!);
             Assert.True(verified.IntegrityValid, verified.Reason);
