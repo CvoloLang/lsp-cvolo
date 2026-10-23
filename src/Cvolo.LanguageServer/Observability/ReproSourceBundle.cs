@@ -137,7 +137,15 @@ internal static class ReproSourceBundle
                 || !manifest.ContainsSensitiveSources
                 || manifest.Snapshots is null
                 || manifest.Snapshots.Count > CaptureConsentState.MaxJournalSnapshots
-                || !manifest.Snapshots.Any(s => s.Kind != "did_close"))
+                || !manifest.Snapshots.Any(s => s.Kind != "did_close")
+                || manifest.TextDigestAlgorithm != "utf16le-sha256"
+                || manifest.Scope != "privacy_scoped_retained_editor_documents_only"
+                || manifest.CompletenessLimitations !=
+                    "replay_history_and_external_project_inputs_not_proven"
+                || !IsIncompleteStatus(manifest.TraceCompleteness)
+                || !IsIncompleteStatus(manifest.DocumentReplayCompleteness)
+                || !IsIncompleteStatus(manifest.ProjectInputsCompleteness)
+                || !IsIncompleteStatus(manifest.SemanticReplayCompleteness))
                 return new(false, "unsupported_or_invalid_manifest", 0, false);
             if (manifestBytes.Length > 512 * 1024
                 || zip.Entries.Any(e => e.FullName != "repro-manifest.json"
@@ -145,19 +153,55 @@ internal static class ReproSourceBundle
                 return new(false, "unexpected_archive_member", 0, false);
             var used = new HashSet<string>(StringComparer.Ordinal);
             var lastByDocument = new Dictionary<string, string>(StringComparer.Ordinal);
+            var sessionByDocument = new Dictionary<string, int>(StringComparer.Ordinal);
+            var uniqueDocuments = new HashSet<string>(StringComparer.Ordinal);
+            var observedIngress = new HashSet<long>();
             int verified = 0;
             int replayedEditBatches = 0;
             bool allReplayable = true;
-            foreach (var record in manifest.Snapshots)
+            for (int i = 0; i < manifest.Snapshots.Count; i++)
             {
+                ReproSourceRecord record = manifest.Snapshots[i];
+                // An archive may be syntactically valid ZIP and have a
+                // recalculated manifest SHA-256, but still be an invalid repro
+                // document. Enforce the exact synthetic namespace and lifecycle.
+                if (!IsSyntheticDocumentId(record.DocumentId)
+                    || !IsSha256(record.Utf16Sha256)
+                    || record.Version < 0
+                    || (record.IngressSequence is not null
+                        && (record.IngressSequence <= 0
+                            || !observedIngress.Add(record.IngressSequence.Value))))
+                    return new(false, "invalid_repro_record", verified, false);
+                if (uniqueDocuments.Add(record.DocumentId)
+                    && record.DocumentId != "doc-" + uniqueDocuments.Count.ToString(
+                        "D4", System.Globalization.CultureInfo.InvariantCulture))
+                    return new(false, "noncanonical_document_id", verified, false);
+                sessionByDocument.TryGetValue(record.DocumentId, out int session);
+                if (record.Kind == "did_open")
+                    session++;
+                if (record.DocumentSessionId !=
+                    record.DocumentId + "/session-" + session.ToString("D4",
+                        System.Globalization.CultureInfo.InvariantCulture)
+                    || session == 0
+                    || (record.Kind == "did_open"
+                        && lastByDocument.ContainsKey(record.DocumentId)))
+                    return new(false, "invalid_document_session", verified, false);
+                sessionByDocument[record.DocumentId] = session;
                 if (record.Kind == "did_close")
                 {
-                    if (record.SourceEntry is not null) return new(false, "close_contains_source", verified, false);
+                    if (record.SourceEntry is not null
+                        || record.SourceSha256 is not null
+                        || record.Changes is not null
+                        || record.Utf16Sha256 != CaptureReplayVerifier.ComputeDigest(
+                            string.Empty))
+                        return new(false, "invalid_close_record", verified, false);
                     lastByDocument.Remove(record.DocumentId);
                     continue;
                 }
                 if (record.Kind is not ("did_open" or "did_change")
-                    || record.SourceEntry is null || record.SourceSha256 is null
+                    || record.SourceEntry != "sources/step-" + i.ToString(
+                        "D4", System.Globalization.CultureInfo.InvariantCulture) + ".cvl"
+                    || !IsSha256(record.SourceSha256)
                     || !used.Add(record.SourceEntry))
                     return new(false, "invalid_snapshot", verified, false);
                 var sourceEntry = zip.GetEntry(record.SourceEntry);
@@ -201,6 +245,20 @@ internal static class ReproSourceBundle
             return new(false, "archive_read_failed", 0, false);
         }
     }
+
+    private static bool IsIncompleteStatus(string? status)
+        => status is "unknown" or "partial";
+
+    private static bool IsSyntheticDocumentId(string? id)
+        => id is { Length: 8 }
+            && id.StartsWith("doc-", StringComparison.Ordinal)
+            && id.AsSpan(4).IndexOfAnyExceptInRange('0', '9') < 0
+            && id != "doc-0000";
+
+    private static bool IsSha256(string? hash)
+        => hash is { Length: 64 }
+            && hash.All(c => c is >= '0' and <= '9'
+                or >= 'a' and <= 'f');
 
     private static byte[] ReadExactBounded(ZipArchiveEntry entry, int maxBytes)
     {

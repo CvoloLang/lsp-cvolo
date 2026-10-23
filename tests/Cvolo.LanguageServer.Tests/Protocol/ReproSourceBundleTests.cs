@@ -1,5 +1,7 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Observability;
 using Xunit;
@@ -74,6 +76,102 @@ public sealed class ReproSourceBundleTests
         Assert.Throws<InvalidDataException>(() => ReproSourceBundle.Build(
             new CaptureExportSnapshot("lease", closeOnly,
                 CaptureReplayVerifier.Inspect(closeOnly, true))));
+    }
+
+    [Fact]
+    public void Recomputed_manifest_hash_does_not_authorize_raw_document_paths()
+    {
+        var bundle = MinimalBundle();
+        var altered = RewriteManifest(bundle.Bytes, json =>
+        {
+            json["snapshots"]!.AsArray()[0]!["documentId"] = "file:///private/main.cvl";
+        });
+        var verified = ReproSourceBundle.Verify(altered.Archive, altered.ManifestHash);
+        Assert.False(verified.IntegrityValid);
+        Assert.Equal("invalid_repro_record", verified.Reason);
+    }
+
+    [Fact]
+    public void Recomputed_hash_with_renumbered_source_member_is_rejected()
+    {
+        var bundle = MinimalBundle();
+        var altered = RewriteManifest(bundle.Bytes, json =>
+        {
+            json["snapshots"]!.AsArray()[0]!["sourceEntry"] = "sources/step-9999.cvl";
+        }, renameSource: "sources/step-9999.cvl");
+        var verified = ReproSourceBundle.Verify(altered.Archive, altered.ManifestHash);
+        Assert.False(verified.IntegrityValid);
+        Assert.Equal("invalid_snapshot", verified.Reason);
+    }
+
+    [Fact]
+    public void Forged_complete_status_is_rejected_even_with_matching_manifest_hash()
+    {
+        var bundle = MinimalBundle();
+        var altered = RewriteManifest(bundle.Bytes, json =>
+        {
+            json["traceCompleteness"] = "complete";
+        });
+        var verified = ReproSourceBundle.Verify(altered.Archive, altered.ManifestHash);
+        Assert.False(verified.IntegrityValid);
+        Assert.Equal("unsupported_or_invalid_manifest", verified.Reason);
+    }
+
+    [Fact]
+    public void Recomputed_hash_does_not_permit_invalid_document_session()
+    {
+        var bundle = MinimalBundle();
+        var altered = RewriteManifest(bundle.Bytes, json =>
+        {
+            json["snapshots"]!.AsArray()[0]!["documentSessionId"] = "doc-0001/session-0042";
+        });
+        var verified = ReproSourceBundle.Verify(altered.Archive, altered.ManifestHash);
+        Assert.False(verified.IntegrityValid);
+        Assert.Equal("invalid_document_session", verified.Reason);
+    }
+
+    private static ReproBundleBytes MinimalBundle()
+    {
+        CapturedDocumentSnapshot[] snapshots =
+        [
+            new(Uri, 1, "source",
+                CaptureReplayVerifier.ComputeDigest("source"), true, null, 1),
+        ];
+        return ReproSourceBundle.Build(new CaptureExportSnapshot(
+            "lease", snapshots, CaptureReplayVerifier.Inspect(snapshots, true)));
+    }
+
+    private static (byte[] Archive, string ManifestHash) RewriteManifest(
+        byte[] archive, Action<JsonObject> mutate, string? renameSource = null)
+    {
+        using var input = new ZipArchive(new MemoryStream(archive), ZipArchiveMode.Read);
+        var manifestEntry = input.GetEntry("repro-manifest.json")!;
+        JsonObject json;
+        using (var reader = new StreamReader(manifestEntry.Open()))
+            json = JsonNode.Parse(reader.ReadToEnd())!.AsObject();
+        mutate(json);
+        byte[] bytes = Encoding.UTF8.GetBytes(json.ToJsonString());
+        string manifestHash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+        using var output = new MemoryStream();
+        using (var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var entry in input.Entries)
+            {
+                var name = entry.FullName == "repro-manifest.json" ? entry.FullName
+                    : renameSource ?? entry.FullName;
+                var copied = zip.CreateEntry(name);
+                using var target = copied.Open();
+                if (entry.FullName == "repro-manifest.json")
+                    target.Write(bytes);
+                else
+                {
+                    using var stream = entry.Open();
+                    stream.CopyTo(target);
+                }
+            }
+        }
+        return (output.ToArray(), manifestHash);
     }
 
     [Fact]
