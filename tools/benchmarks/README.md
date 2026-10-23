@@ -72,3 +72,28 @@ fabricated PASS. Measurements on uncontrolled workstations are exploratory;
 there is no approved baseline or end-to-end regression PASS. Future work
 must add actual consented \`repro\` measurement, workloads other than
 completion, and controlled host/GC/CPU/memory evidence before acceptance.
+
+## Exploratory process CPU, GC and memory evidence
+
+The LSP collector also calls `cvolo/observability/flightResourceSnapshot.v1`
+once **after warmup, before the timed sample loop**, and once **after** it.
+The server returns process-wide cumulative CPU time (`TimeSpan.Ticks`),
+`GC.GetTotalAllocatedBytes`, Gen0/1/2 collection counts, managed heap
+bytes and working-set bytes. The raw data contains
+`runs[].processResourceDeltas[mode]` with the sampled interval, positive
+cumulative deltas and two memory gauge values.
+
+The client computes per-measured-request **process-average** CPU microseconds
+and allocated bytes as exploratory descriptive figures only. These are not
+the allocation or CPU cost of any specific handler: background work in the
+same server process is included; CPU time can exceed elapsed wall time on
+multiple cores. The resource-probe RPC calls themselves are **outside** the
+request-timing loop but still create some allocations in the sampled
+process. The two memory points **do not** measure peak RSS, and heap sizes can
+decrease as GC proceeds. Failures in resource scope, monotonic clocks or
+cumulative counters **abort** collection and publish an INCONCLUSIVE report
+instead of a partial PASS.
+
+Resource metrics have no numerical acceptance budgets yet. In particular
+they do not satisfy compiler/Tooling resource acceptance, fixture breadth,
+isolation of server background CPU or a normative `repro` benchmark.
