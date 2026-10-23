@@ -109,7 +109,12 @@ def evaluate(data, spec=None):
         baselines.append(quantile(
             [x for r in chosen for x in r["samplesUs"]["off"]], .95))
     lower_baseline, upper_baseline = quantile(baselines, .025), quantile(baselines, .975)
-    width = (upper_baseline - lower_baseline) / base_p95
+    # Aggregate p95 is insensitive to an unstable *subset* of runs.
+    # Also reject large between-run baseline drift even when cluster
+    # bootstrap p95 happens to collapse to the same high tail estimate.
+    per_run_p95 = [quantile(run["samplesUs"]["off"], .95) for run in runs]
+    inter_run_spread = (max(per_run_p95) - min(per_run_p95)) / base_p95
+    width = max((upper_baseline - lower_baseline) / base_p95, inter_run_spread)
 
     details = {}
     for mode in ("basic", "detailed", "repro"):
