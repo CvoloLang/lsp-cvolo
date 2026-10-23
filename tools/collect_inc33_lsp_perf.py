@@ -26,6 +26,7 @@ import time
 from urllib.parse import quote
 
 MODES = ("off", "basic", "detailed")
+WORKLOADS = ("completion", "document_symbol")
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 
@@ -208,8 +209,30 @@ def wait_for_document_applied(process, timeout):
     raise BenchmarkFailure("document_open_not_confirmed")
 
 
+def workload_request(workload, document_uri):
+    if workload == "completion":
+        return "textDocument/completion", {
+            "textDocument": {"uri": document_uri},
+            "position": {"line": 0, "character": 4},
+            "context": {"triggerKind": 1},
+        }
+    if workload == "document_symbol":
+        return "textDocument/documentSymbol", {
+            "textDocument": {"uri": document_uri},
+        }
+    raise BenchmarkFailure("unsupported_benchmark_workload")
+
+
+def valid_workload_result(workload, result):
+    if workload == "completion":
+        return isinstance(result, dict) and isinstance(result.get("items"), list)
+    if workload == "document_symbol":
+        return isinstance(result, list)
+    return False
+
+
 def execute_mode(command, mode, project_uri, document_uri, source, timeout,
-                 warmup, samples):
+                 warmup, samples, workload="completion"):
     process = RpcProcess(command, timeout)
     try:
         _, init = process.call("initialize", {
@@ -231,26 +254,29 @@ def execute_mode(command, mode, project_uri, document_uri, source, timeout,
         if (not isinstance(policy, dict) or policy.get("status") != "applied"
                 or policy.get("effectiveMode") != mode):
             raise BenchmarkFailure("recording_mode_not_fully_applied")
-        # This one request shape is identical for all 3 supported modes.
-        request = {
-            "textDocument": {"uri": document_uri},
-            "position": {"line": 0, "character": 4},
-            "context": {"triggerKind": 1},
-        }
-        def completion():
-            elapsed, result = process.call("textDocument/completion", request)
-            if not isinstance(result, dict) or not isinstance(result.get("items"), list):
-                raise BenchmarkFailure("completion_result_invalid_or_unavailable")
+        # Identical request payload for all supported recording modes.
+        # Completion has a deliberate 120-ms quiet period in production;
+        # documentSymbol does not and is useful for measuring a lower-latency
+        # path without modifying any LSP scheduling/debounce semantics.
+        method, request = workload_request(workload, document_uri)
+
+        def measured_request():
+            elapsed, result = process.call(method, request)
+            if not valid_workload_result(workload, result):
+                raise BenchmarkFailure("benchmark_result_invalid_or_unavailable")
             return round(elapsed, 3)
 
         for _ in range(warmup):
-            completion()
-        return [completion() for _ in range(samples)]
+            measured_request()
+        return [measured_request() for _ in range(samples)]
     finally:
         process.close()
 
 
-def collect(command, repetitions=8, samples=50, warmup=10, timeout=20):
+def collect(command, repetitions=8, samples=50, warmup=10, timeout=20,
+            workload="completion"):
+    if workload not in WORKLOADS:
+        raise BenchmarkFailure("unsupported_benchmark_workload")
     if repetitions < 1 or samples < 1 or warmup < 0:
         raise BenchmarkFailure("invalid_measurement_parameters")
     sha = server_provenance(command)
@@ -271,7 +297,7 @@ def collect(command, repetitions=8, samples=50, warmup=10, timeout=20):
             values = {}
             for mode in order:
                 values[mode] = execute_mode(command, mode, project_uri, doc_uri,
-                    source, timeout, warmup, samples)
+                    source, timeout, warmup, samples, workload)
             runs.append({"repetition": repetition,
                          "modeOrder": order, "samplesUs": values})
     sdk = subprocess.run(["dotnet", "--version"], timeout=15,
@@ -279,7 +305,7 @@ def collect(command, repetitions=8, samples=50, warmup=10, timeout=20):
                          check=True).stdout.decode("ascii", errors="replace").strip()
     return {
         "schemaVersion": 1, "evidenceKind": "measured",
-        "workload": "completion", "fixtureClass": "small",
+        "workload": workload, "fixtureClass": "small",
         "fixtureSha256": fixture_sha, "buildSha": sha,
         "host": {"os": platform.system(), "cpu": platform.processor() or
                  platform.machine(),
@@ -332,7 +358,7 @@ def exploratory_summary(data):
         "scope": "single_workload_uncontrolled_host",
         "completedModes": list(MODES),
         "missingModes": ["repro"],
-        "latencyScope": "client_observed_completion_round_trip",
+        "latencyScope": "client_observed_lsp_round_trip",
         "perMode": summaries,
         "confidenceBoundedBudgetVerdict": False,
         "normativeRegressionPass": False,
@@ -365,12 +391,13 @@ def main():
     parser.add_argument("--repetitions", type=int, default=8)
     parser.add_argument("--samples", type=int, default=50)
     parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--workload", choices=WORKLOADS, default="completion")
     parser.add_argument("--rpc-timeout", type=float, default=20)
     args = parser.parse_args()
     try:
         command = command_for(args.server)
         data = collect(command, args.repetitions, args.samples,
-                       args.warmup, args.rpc_timeout)
+                       args.warmup, args.rpc_timeout, args.workload)
         # Import the same evaluator used by the test suite. The current server
         # rejects repro, so incomplete four-mode evidence MUST NOT become PASS.
         from evaluate_inc33_perf import evaluate
@@ -382,7 +409,7 @@ def main():
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print("Measured off/basic/detailed LSP completion; repro unavailable.")
+        print("Measured off/basic/detailed LSP " + args.workload + "; repro unavailable.")
         print("Normative 4-mode gate: INCONCLUSIVE (missing_or_duplicated_mode).")
         return 0
     except (BenchmarkFailure, OSError, subprocess.SubprocessError) as error:
