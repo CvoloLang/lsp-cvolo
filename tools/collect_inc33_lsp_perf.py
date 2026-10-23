@@ -13,6 +13,7 @@ no claim that background server work has reached a steady state.
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -399,6 +400,65 @@ def collect(command, repetitions=8, samples=50, warmup=10, timeout=20,
     }
 
 
+def exploratory_resource_summary(data):
+    """Summarize process-wide resource measurements without per-RPC attribution."""
+    from statistics import median
+
+    runs = data["runs"]
+    populated = [
+        isinstance(run.get("processResourceDeltas"), dict)
+        for run in runs
+    ]
+    if not any(populated):
+        return {
+            "status": "not_collected",
+            "scope": "process_wide_not_per_request",
+            "normativeBudgetPass": False,
+        }
+    if not all(populated):
+        raise BenchmarkFailure("incomplete_resource_evidence")
+    per_mode = {}
+    for mode in MODES:
+        samples = [run["processResourceDeltas"].get(mode) for run in runs]
+        if any(not isinstance(sample, dict) for sample in samples):
+            raise BenchmarkFailure("missing_resource_mode")
+        for sample in samples:
+            if (sample.get("attribution") != "process_wide_not_per_request"
+                or sample.get("regressionBudgetPass") is not False
+                or sample.get("peakMemoryObserved") is not False):
+                raise BenchmarkFailure("invalid_resource_summary_scope")
+            for field in ("allocatedBytesPerRequest", "processCpuUsPerRequest"):
+                value = sample.get(field)
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    raise BenchmarkFailure("invalid_resource_summary_value")
+                if not math.isfinite(value) or value < 0:
+                    raise BenchmarkFailure("invalid_resource_summary_value")
+        per_mode[mode] = {
+            "runs": len(samples),
+            "medianAllocatedBytesPerRequest": round(
+                median(sample["allocatedBytesPerRequest"] for sample in samples), 2),
+            "medianProcessCpuUsPerRequest": round(
+                median(sample["processCpuUsPerRequest"] for sample in samples), 2),
+            "observedGen0Collections": sum(sample["gen0CollectionsDelta"] for sample in samples),
+            "observedGen1Collections": sum(sample["gen1CollectionsDelta"] for sample in samples),
+            "observedGen2Collections": sum(sample["gen2CollectionsDelta"] for sample in samples),
+        }
+    baseline = per_mode["off"]["medianAllocatedBytesPerRequest"]
+    if baseline <= 0:
+        raise BenchmarkFailure("invalid_resource_baseline")
+    for mode in MODES:
+        per_mode[mode]["observedAllocationDeltaPercent"] = round(
+            (per_mode[mode]["medianAllocatedBytesPerRequest"] / baseline - 1) * 100, 2)
+    return {
+        "status": "descriptive_only",
+        "scope": "process_wide_not_per_request",
+        "sampling": "two_non_atomic_points_excluding_timed_samples",
+        "peakMemoryObserved": False,
+        "normativeBudgetPass": False,
+        "perMode": per_mode,
+    }
+
+
 def exploratory_summary(data):
     """Descriptive statistics only, NOT the normative four-mode verdict.
 
@@ -455,6 +515,7 @@ def exploratory_summary(data):
         "observedLatencyBudgetVerdict": "INCONCLUSIVE",
         "confidenceBoundedBudgetVerdict": False,
         "normativeRegressionPass": False,
+        "processResources": exploratory_resource_summary(data),
     }
 
 
