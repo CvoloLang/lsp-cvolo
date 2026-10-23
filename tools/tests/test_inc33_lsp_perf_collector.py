@@ -26,6 +26,32 @@ class RealCollectorContractTests(unittest.TestCase):
         self.assertEqual(["detailed", "off", "basic"], observed[2])
         self.assertEqual(observed[0], observed[3])
 
+    def test_exploratory_measurements_do_not_claim_normative_pass(self):
+        raw = {
+            "runs": [
+                {"samplesUs": {
+                    "off": [100, 100, 100],
+                    "basic": [101, 101, 101],
+                    "detailed": [105, 105, 105],
+                }},
+            ],
+        }
+        report = collector.exploratory_summary(raw)
+        self.assertEqual("DESCRIPTIVE_ONLY", report["status"])
+        self.assertEqual(["repro"], report["missingModes"])
+        self.assertFalse(report["normativeRegressionPass"])
+        self.assertFalse(report["confidenceBoundedBudgetVerdict"])
+        self.assertEqual(100, report["perMode"]["off"]["p95Us"])
+        self.assertEqual(1, report["perMode"]["basic"]["observedP95DeltaPercent"])
+        self.assertEqual(3, report["perMode"]["detailed"]["sampleCount"])
+
+    def test_exploratory_percentiles_reject_invalid_or_absent_samples(self):
+        record = {"runs": [{"samplesUs": {
+            "off": [10], "basic": [11], "detailed": [12]}}]}
+        record["runs"][0]["samplesUs"]["basic"] = [float("nan")]
+        with self.assertRaisesRegex(collector.BenchmarkFailure, "invalid_exploratory_samples"):
+            collector.exploratory_summary(record)
+
     def test_header_delimited_frame_parser(self):
         payload = {"jsonrpc": "2.0", "id": 1, "result": {"x": 4}}
         self.assertEqual(payload, collector.read_frame(io.BytesIO(collector.frame(payload))))
