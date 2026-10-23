@@ -31,7 +31,7 @@ and scheduling contract remain unchanged.
 |---|---|---:|---:|---:|---:|---:|
 | Ubuntu | Before | 29,383.76 | 33,302.80 | 34,284.00 | +3,919.04 | +4,900.24 |
 | Ubuntu | After | 29,012.08 | 32,796.72 | 33,872.08 | +3,784.64 | +4,860.00 |
-| Windows | Before | 29,528.85 | 33,727.00 | 34,503.44 | +4,198.15 | +4,974.59 |
+| Windows | Before | 29,528.88 | 33,727.04 | 34,503.44 | +4,198.16 | +4,974.56 |
 | Windows | After | 29,870.08 | 33,490.56 | 34,384.16 | +3,620.48 | +4,514.08 |
 
 The differences in extra mode allocations are about **−134 / −40 bytes** for
