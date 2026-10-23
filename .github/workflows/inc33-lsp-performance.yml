@@ -21,6 +21,12 @@ on:
         default: '50'
         type: choice
         options: ['50', '100']
+      workload:
+        description: 'LSP method to measure; document_symbol has no fixed quiet period'
+        required: true
+        default: 'document_symbol'
+        type: choice
+        options: ['document_symbol', 'completion']
 
 permissions:
   contents: read
@@ -77,6 +83,7 @@ jobs:
             --server src/Cvolo.LanguageServer/bin/Release/net10.0/cvolo-language-server.dll \
             --repetitions ${{ inputs.repetitions || '8' }} \
             --samples ${{ inputs.samples || '50' }} \
+            --workload ${{ inputs.workload || 'document_symbol' }} \
             --output test-evidence/real-lsp-completion.json \
             --report test-evidence/real-lsp-completion-result.json
           python -c "import json; p=json.load(open('test-evidence/real-lsp-completion-result.json')); assert p['status']=='INCONCLUSIVE' and p['reason']=='missing_or_duplicated_mode' and not p['endToEndRegressionGatePassed']"
@@ -84,7 +91,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: inc33-real-lsp-${{ matrix.os }}
+          name: inc33-real-lsp-${{ matrix.os }}-${{ inputs.workload || 'document_symbol' }}
           path: |
             test-evidence/real-lsp-completion.json
             test-evidence/real-lsp-completion-result.json
