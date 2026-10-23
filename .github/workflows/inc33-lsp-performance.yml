@@ -1,0 +1,80 @@
+name: Inc 3.3 exploratory LSP performance
+
+on:
+  workflow_dispatch:
+    inputs:
+      repetitions:
+        description: 'Paired repetitions (default 8)'
+        required: true
+        default: '8'
+        type: choice
+        options: ['8', '12']
+      samples:
+        description: 'Samples per mode and repetition'
+        required: true
+        default: '50'
+        type: choice
+        options: ['50', '100']
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 70
+    env:
+      ContinuousIntegrationBuild: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Checkout CI-pinned development Tooling source
+        uses: actions/checkout@v4
+        with:
+          repository: IgorShaposhnikov/Cvolo
+          ref: 43f07cc3981d8254571d278a63f83c683065d708
+          path: .dev-compiler
+          persist-credentials: false
+      - name: Build and verify development Tooling
+        shell: pwsh
+        run: >
+          ./build/use-development-tooling.ps1
+          -CompilerSource ".dev-compiler"
+          -ExpectedCommit "43f07cc3981d8254571d278a63f83c683065d708"
+      - name: Validate benchmark harness
+        run: python -m unittest discover -s tools/tests -v
+      - name: Restore
+        run: dotnet restore src/Cvolo.LanguageServer.slnx --locked-mode -p:ContinuousIntegrationBuild=true
+      - name: Build with verifiable SHA
+        shell: bash
+        run: |
+          dotnet build src/Cvolo.LanguageServer.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true -p:LanguageServerCommit=${{ github.sha }}
+      - name: Run real-process exploratory completion benchmark
+        shell: bash
+        run: |
+          python tools/collect_inc33_lsp_perf.py \
+            --server src/Cvolo.LanguageServer/bin/Release/net10.0/cvolo-language-server.dll \
+            --repetitions ${{ inputs.repetitions }} \
+            --samples ${{ inputs.samples }} \
+            --output test-evidence/real-lsp-completion.json \
+            --report test-evidence/real-lsp-completion-result.json
+          python -c "import json; p=json.load(open('test-evidence/real-lsp-completion-result.json')); assert p['status']=='INCONCLUSIVE' and p['reason']=='missing_or_duplicated_mode' and not p['endToEndRegressionGatePassed']"
+      - name: Upload real-process evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inc33-real-lsp-${{ matrix.os }}
+          path: |
+            test-evidence/real-lsp-completion.json
+            test-evidence/real-lsp-completion-result.json
+          if-no-files-found: warn
+          retention-days: 7
