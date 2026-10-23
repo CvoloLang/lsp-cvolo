@@ -293,6 +293,52 @@ def collect(command, repetitions=8, samples=50, warmup=10, timeout=20):
     }
 
 
+def exploratory_summary(data):
+    """Descriptive statistics only, NOT the normative four-mode verdict.
+
+    This summary remains useful when repro cannot be enabled. No threshold,
+    confidence claim or hidden PASS is inferred from incomplete modes.
+    """
+    import math
+
+    def percentile(values, fraction):
+        ordered = sorted(values)
+        return ordered[max(0, math.ceil(len(ordered) * fraction) - 1)]
+
+    all_samples = {}
+    for mode in MODES:
+        samples = []
+        for run in data["runs"]:
+            samples.extend(run["samplesUs"][mode])
+        if not samples or any(not isinstance(x, (float, int))
+                              or isinstance(x, bool) or not math.isfinite(x)
+                              or x <= 0 for x in samples):
+            raise BenchmarkFailure("invalid_exploratory_samples")
+        all_samples[mode] = samples
+
+    baseline = percentile(all_samples["off"], .95)
+    summaries = {}
+    for mode, samples in all_samples.items():
+        p95 = percentile(samples, .95)
+        summaries[mode] = {
+            "sampleCount": len(samples),
+            "p50Us": percentile(samples, .50),
+            "p95Us": p95,
+            "p99Us": percentile(samples, .99),
+            "observedP95DeltaPercent": round((p95 / baseline - 1) * 100, 5),
+        }
+    return {
+        "status": "DESCRIPTIVE_ONLY",
+        "scope": "single_workload_uncontrolled_host",
+        "completedModes": list(MODES),
+        "missingModes": ["repro"],
+        "latencyScope": "client_observed_completion_round_trip",
+        "perMode": summaries,
+        "confidenceBoundedBudgetVerdict": False,
+        "normativeRegressionPass": False,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", required=True,
@@ -314,6 +360,7 @@ def main():
         report = evaluate(data)
         if report["status"] != "INCONCLUSIVE" or report["reason"] != "missing_or_duplicated_mode":
             raise BenchmarkFailure("unexpected_four_mode_acceptance")
+        report["exploratoryMeasurements"] = exploratory_summary(data)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
