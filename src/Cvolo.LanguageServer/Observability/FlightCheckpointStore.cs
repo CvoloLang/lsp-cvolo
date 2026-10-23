@@ -15,10 +15,16 @@ internal sealed class FlightCheckpointStore
     internal const int MaxFiles = 8;
     private readonly string _directory;
     private readonly object _gate = new();
-    private readonly Func<DateTimeOffset> _clock;
+    // The per-process prefix is fixed at construction; the incident's
+    // monotonic event ordinal (not Task.Run completion time) orders files
+    // within that process. Across processes, UTC clock ordering is only
+    // best effort and is explicitly not a global ordering guarantee.
+    private readonly string _processPrefix;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private string _writeState = "not_started";
     private string? _failure;
+    private string? _latestPublishedIncidentId;
+    private long _latestPublishedSequence;
 
     internal FlightCheckpointStore(string? directory = null,
         Func<DateTimeOffset>? clock = null)
@@ -26,7 +32,9 @@ internal sealed class FlightCheckpointStore
         _directory = directory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Cvolo", "FlightRecorder");
-        _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _processPrefix = (clock ?? (() => DateTimeOffset.UtcNow))().UtcTicks.ToString(
+            "D19", System.Globalization.CultureInfo.InvariantCulture)
+            + "-" + Guid.NewGuid().ToString("N");
     }
 
     internal FlightCheckpointStatus Write(FlightRecorderSnapshot snapshot)
@@ -42,13 +50,25 @@ internal sealed class FlightCheckpointStore
                 if (snapshot.Events.Count > LspFlightRecorder.MaxEvents)
                     return Fail("too_many_events");
 
+                // Identify the exact incident that the snapshot names.  An
+                // incident from a stale async task must not be mislabeled as
+                // the newest published checkpoint.
+                FlightRecorderEvent? trigger = snapshot.Events.FirstOrDefault(e =>
+                    e.Kind == "incident" && e.Stage == "trigger"
+                    && e.Outcome == snapshot.IncidentReason
+                    && "incident-" + e.Sequence.ToString("D6",
+                        System.Globalization.CultureInfo.InvariantCulture)
+                        == snapshot.IncidentId);
+                if (trigger is null)
+                    return Fail("incident_marker_missing");
+
                 var events = new List<FlightCheckpointEvent>(snapshot.Events.Count);
                 long prior = 0;
                 foreach (var e in snapshot.Events)
                 {
                     if (e.Sequence <= prior || !IsKnownEvent(new FlightCheckpointEvent(
-                    e.Sequence, e.ObservedAtUtc, e.Kind, e.Stage,
-                    e.IngressSequence, e.Outcome)))
+                        e.Sequence, e.ObservedAtUtc, e.Kind, e.Stage,
+                        e.IngressSequence, e.Outcome)))
                         return Fail("unsafe_or_invalid_event");
                     prior = e.Sequence;
                     events.Add(new(e.Sequence, e.ObservedAtUtc, e.Kind, e.Stage,
@@ -74,10 +94,12 @@ internal sealed class FlightCheckpointStore
                 if (!OperatingSystem.IsWindows())
                     File.SetUnixFileMode(_directory,
                         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                // Stable event order survives arbitrarily reordered async
+                // writes.  Using time-at-write would make an older incident
+                // look newer, and could prune the actual latest incident.
                 string file = Path.Combine(_directory, "flight-" +
-                    _clock().UtcTicks.ToString("D19",
-                        System.Globalization.CultureInfo.InvariantCulture) + "-" +
-                    Guid.NewGuid().ToString("N") + ".json");
+                    _processPrefix + "-" + trigger.Sequence.ToString("D19",
+                        System.Globalization.CultureInfo.InvariantCulture) + ".json");
                 temporary = file + ".partial";
                 using (var output = new FileStream(temporary, FileMode.CreateNew,
                     FileAccess.Write, FileShare.None))
@@ -87,10 +109,25 @@ internal sealed class FlightCheckpointStore
                 }
                 File.Move(temporary, file);
                 temporary = null;
+                // Validate the PUBLISHED FILE, not merely the serialized
+                // in-memory bytes before writing. This is still not a
+                // directory-fsync or sudden-power-loss guarantee.
+                if (!Validate(File.ReadAllBytes(file)))
+                {
+                    File.Delete(file);
+                    return Fail("published_checkpoint_verification_failed");
+                }
                 Prune();
-                _writeState = "verified_file_published";
-                _failure = null;
-                return new(_writeState, null, snapshot.IncidentId,
+                // An older Task.Run completing after a newer one must not
+                // regress the observable status of the most recent incident.
+                if (trigger.Sequence >= _latestPublishedSequence)
+                {
+                    _latestPublishedSequence = trigger.Sequence;
+                    _latestPublishedIncidentId = snapshot.IncidentId;
+                    _writeState = "verified_file_published";
+                    _failure = null;
+                }
+                return new("verified_file_published", null, snapshot.IncidentId,
                     true, true, false, false);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException
@@ -115,8 +152,9 @@ internal sealed class FlightCheckpointStore
     {
         lock (_gate)
         {
-            return new(_writeState, _failure, null,
-                _writeState == "verified_file_published", false, false, false);
+            return new(_writeState, _failure, _latestPublishedIncidentId,
+                _writeState == "verified_file_published",
+                _writeState == "verified_file_published", false, false);
         }
     }
 
@@ -229,8 +267,13 @@ internal sealed class FlightCheckpointStore
 
     private FlightCheckpointStatus Fail(string reason)
     {
-        _writeState = "failed";
-        _failure = reason;
+        // A later failed attempt does not invalidate an already published,
+        // verified checkpoint. Preserve last-good status for diagnostics.
+        if (_writeState != "verified_file_published")
+        {
+            _writeState = "failed";
+            _failure = reason;
+        }
         return new("failed", reason, null, false, false, false, false);
     }
 

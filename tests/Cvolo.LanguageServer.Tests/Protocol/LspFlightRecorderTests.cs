@@ -281,6 +281,64 @@ public sealed class LspFlightRecorderTests
     }
 
     [Fact]
+    public void Delayed_older_incident_cannot_replace_newer_recovery_or_status()
+    {
+        DateTimeOffset now = new(2026, 10, 23, 11, 0, 0, TimeSpan.Zero);
+        string directory = Path.Combine(Path.GetTempPath(),
+            "cvolo-flight-order-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var recorder = new LspFlightRecorder(() => now);
+            recorder.OnHandlerSettled("did_open", "faulted", 1);
+            FlightRecorderSnapshot older = recorder.Inspect();
+            now = now.AddSeconds(1);
+            recorder.OnHandlerSettled("did_change", "faulted", 2);
+            FlightRecorderSnapshot newer = recorder.Inspect();
+            var writer = new FlightCheckpointStore(directory, () => now);
+
+            // Emulate Task.Run scheduling: the newer incident completes first.
+            Assert.True(writer.Write(newer).VerifiedAfterWrite);
+            Assert.True(writer.Write(older).VerifiedAfterWrite);
+            Assert.Equal(newer.IncidentId, writer.Inspect().IncidentId);
+
+            var recovered = new FlightCheckpointStore(directory).RecoverLatest();
+            Assert.True(recovered.ValidCheckpointRecovered);
+            Assert.Equal(newer.IncidentId, recovered.IncidentId);
+            Assert.False(recovered.AllProcessHistoryRecovered);
+            Assert.Equal(2, Directory.GetFiles(directory, "*.json").Length);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Reverse_order_publication_prunes_oldest_incidents_by_event_sequence()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "cvolo-flight-retain-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var recorder = new LspFlightRecorder();
+            var captures = new List<FlightRecorderSnapshot>();
+            for (int i = 0; i < FlightCheckpointStore.MaxFiles + 4; i++)
+            {
+                recorder.OnHandlerSettled("did_change", "faulted", i + 1);
+                captures.Add(recorder.Inspect());
+            }
+            var writer = new FlightCheckpointStore(directory);
+            foreach (var capture in captures.AsEnumerable().Reverse())
+                Assert.True(writer.Write(capture).VerifiedAfterWrite);
+
+            Assert.Equal(FlightCheckpointStore.MaxFiles,
+                Directory.GetFiles(directory, "*.json").Length);
+            Assert.Equal(captures[^1].IncidentId,
+                new FlightCheckpointStore(directory).RecoverLatest().IncidentId);
+            Assert.Equal(captures[^1].IncidentId, writer.Inspect().IncidentId);
+            Assert.Empty(Directory.GetFiles(directory, "*.partial"));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
     public void Ring_is_bounded_and_reports_overwritten_prefix()
     {
         var recorder = new LspFlightRecorder();
