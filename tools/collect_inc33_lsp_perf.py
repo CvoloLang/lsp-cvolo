@@ -227,7 +227,12 @@ def valid_workload_result(workload, result):
     if workload == "completion":
         return isinstance(result, dict) and isinstance(result.get("items"), list)
     if workload == "document_symbol":
-        return isinstance(result, list)
+        # The fixture contains a top-level Main declaration. An empty outline
+        # may be a successful RPC but is not evidence that semantic document
+        # analysis actually ran; reject rather than benchmark a no-op.
+        return (isinstance(result, list) and len(result) > 0
+                and all(isinstance(item, dict) and isinstance(item.get("name"), str)
+                        and bool(item["name"]) for item in result))
     return False
 
 
