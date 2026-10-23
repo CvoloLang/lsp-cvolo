@@ -536,11 +536,12 @@ public sealed class RecordingControlPlaneTests
     [Fact]
     public async Task Private_repro_export_requires_second_confirmation_and_publishes_integrity_manifest()
     {
+        using var workspace = TestWorkspace.CreateProject(["private-archive.cvl"]);
         var (observer, _) = CreateObserver();
         using var session = ProtocolSession.Start(observer: observer);
-        await session.Client.InitializeAsync();
+        await session.Client.InitializeAsync(rootPath: workspace.DirectoryPath);
         string serverId = observer.Identity.ServerInstanceId;
-        string documentUri = "file:///C:/project/private-archive.cvl";
+        string documentUri = workspace.DocumentUri("private-archive.cvl").AbsoluteUri;
         JObject granted = await session.Client.GrantCaptureConsentAsync(
             serverId, [documentUri], true, false, 60);
         string lease = (string)granted["leaseId"]!;
@@ -580,10 +581,50 @@ public sealed class RecordingControlPlaneTests
             using var reader = new StreamReader(zip.GetEntry("repro-manifest.json")!.Open());
             string manifest = await reader.ReadToEndAsync();
             Assert.DoesNotContain("private-archive.cvl", manifest);
-            Assert.DoesNotContain("C:/project", manifest);
+            Assert.DoesNotContain(workspace.DirectoryPath, manifest);
             Assert.Contains("doc-0001/session-0001", manifest);
         }
         finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task Rejected_document_open_cannot_create_a_source_repro_archive()
+    {
+        using var workspace = TestWorkspace.CreateProject(["main.cvl"]);
+        var (observer, _) = CreateObserver();
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync(rootPath: workspace.DirectoryPath);
+        string serverId = observer.Identity.ServerInstanceId;
+        // The URI is syntactically valid and consented, but no document is
+        // present in the backend project. An attempted didOpen is not a capture.
+        Uri missing = workspace.DocumentUri("missing.cvl");
+        JObject grant = await session.Client.GrantCaptureConsentAsync(
+            serverId, [missing.AbsoluteUri], true, false, 60);
+        string lease = (string)grant["leaseId"]!;
+        await session.Client.ArmCaptureJournalAsync(serverId, lease);
+        await session.Client.NotifyDidOpenAsync(missing, "cvolo", 1, "PRIVATE_UNACCEPTED");
+        await session.Client.WaitUntilAsync(
+            () => session.Server.Store.OpenUris.Count == 0,
+            "invalid didOpen remains unopened");
+        // A request is not a producer-close proof, but test receipt counters
+        // allow us to wait until the rejection itself has settled.
+        JObject status;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        do
+        {
+            status = await session.Client.GetCaptureConsentStatusAsync();
+            if ((int?)status["capturedInputOutcomes"] >= 1) break;
+            await Task.Delay(10);
+        } while (DateTime.UtcNow < deadline);
+        Assert.True((int?)status["capturedInputOutcomes"] >= 1,
+            "rejected didOpen handler did not settle");
+        Assert.Equal(0, (int)status["capturedSnapshots"]!);
+        JObject seal = await session.Client.SealCaptureJournalAsync(serverId, lease);
+        Assert.Equal("sealed_in_memory", (string?)seal["status"]);
+        JObject refused = await session.Client.ExportSourceReproAsync(serverId, lease, true);
+        Assert.Equal("rejected", (string?)refused["status"]);
+        Assert.Equal("no_scoped_source_snapshots", (string?)refused["reason"]);
+        Assert.False((bool)refused["localFileCreated"]!);
     }
 
     [Fact]
