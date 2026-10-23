@@ -339,6 +339,71 @@ public sealed class LspFlightRecorderTests
     }
 
     [Fact]
+    public void Concurrent_faults_emit_atomically_adjacent_trigger_edges()
+    {
+        var recorder = new LspFlightRecorder();
+        Parallel.For(0, 32, i =>
+            recorder.OnHandlerSettled("did_change", "faulted", i + 1));
+        var snapshot = recorder.Inspect();
+        var events = snapshot.Events.ToArray();
+        Assert.Equal(64, events.Length);
+        for (int i = 1; i < events.Length; i += 2)
+        {
+            Assert.Equal("handler_settled", events[i - 1].Stage);
+            Assert.Equal("faulted", events[i - 1].Outcome);
+            Assert.Equal("incident", events[i].Kind);
+            Assert.Equal("trigger", events[i].Stage);
+            Assert.Equal(events[i - 1].Sequence + 1, events[i].Sequence);
+        }
+        var report = FlightCausalAnalyzer.Analyze(snapshot);
+        Assert.Equal(32, report.LinkedAutomaticFaultTriggers);
+        Assert.Equal(32, report.MissingHandlerEntries);
+        Assert.Equal(32, report.DirectEdges.Count);
+        Assert.False(report.RootCauseProven);
+        Assert.False(report.EndToEndCriticalPathProven);
+    }
+
+    [Fact]
+    public void Causal_report_matches_only_unique_handler_pairs()
+    {
+        long ticks = 0;
+        long ms = System.Diagnostics.Stopwatch.Frequency / 1000;
+        var recorder = new LspFlightRecorder(monotonicTicks: () => ticks);
+        recorder.OnHandlerEntered("did_open", 4);
+        ticks += 20 * ms;
+        recorder.OnHandlerSettled("did_open", "applied", 4);
+        recorder.OnHandlerEntered("did_change", 7);
+        recorder.OnHandlerEntered("did_change", 7);
+        ticks += 10 * ms;
+        recorder.OnHandlerSettled("did_change", "rejected", 7);
+        recorder.OnHandlerSettled("did_close", "rejected", 9);
+        var result = FlightCausalAnalyzer.Analyze(recorder.Inspect());
+        Assert.Equal("partial", result.Coverage);
+        Assert.Equal(1, result.MatchedHandlerLifecycleEdges);
+        Assert.Equal(3, result.AmbiguousDuplicateEvents);
+        Assert.Equal(1, result.MissingHandlerEntries);
+        Assert.Single(result.DirectEdges);
+        Assert.Equal("handler_lifecycle", result.DirectEdges[0].Relation);
+        Assert.Equal(4L, result.DirectEdges[0].IngressSequence);
+        Assert.InRange(result.LongestObservedHandlerMs!.Value, 19, 21);
+        Assert.Equal("unknown", result.RootCause);
+        Assert.False(result.CompleteDocumentHistoryProven);
+    }
+
+    [Fact]
+    public void Causal_report_rejects_missing_ingress_as_edge_proof()
+    {
+        var recorder = new LspFlightRecorder();
+        recorder.OnHandlerEntered("did_open", null);
+        recorder.OnHandlerSettled("did_open", "applied", null);
+        var report = FlightCausalAnalyzer.Analyze(recorder.Inspect());
+        Assert.Equal("partial", report.Coverage);
+        Assert.Equal(2, report.UnknownIngressEvents);
+        Assert.Empty(report.DirectEdges);
+        Assert.False(report.TransportToHandlerCorrelationProven);
+    }
+
+    [Fact]
     public void Ring_is_bounded_and_reports_overwritten_prefix()
     {
         var recorder = new LspFlightRecorder();

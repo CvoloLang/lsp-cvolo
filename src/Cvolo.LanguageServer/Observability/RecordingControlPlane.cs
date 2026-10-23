@@ -30,6 +30,7 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string FlightCheckpointStatusMethod = "cvolo/observability/flightCheckpointStatus.v1";
     internal const string FlightCheckpointRecoveryMethod = "cvolo/observability/flightCheckpointRecovery.v1";
     internal const string FlightPerformanceMethod = "cvolo/observability/flightPerformanceReport.v1";
+    internal const string FlightCausalMethod = "cvolo/observability/flightCausalReport.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
@@ -55,6 +56,9 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
 
     internal FlightPerformanceEvidence InspectFlightPerformance()
         => FlightPerformanceAnalyzer.Analyze(_flightRecorder.Inspect());
+
+    internal FlightCausalEvidence InspectFlightCausality()
+        => FlightCausalAnalyzer.Analyze(_flightRecorder.Inspect());
 
     internal FlightIncidentIndex InspectFlightIncidentIndex()
         => FlightIncidentAnalyzer.Analyze(_flightRecorder.Inspect());

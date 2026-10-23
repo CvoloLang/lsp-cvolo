@@ -46,9 +46,15 @@ internal sealed class LspFlightRecorder(
     {
         if (!IsDocumentKind(kind) || outcome is not ("applied" or "rejected" or "faulted"))
             return;
-        Add(kind, "handler_settled", ingress, outcome);
-        if (outcome == "faulted")
-            MarkIncident("document_handler_faulted");
+        lock (_gate)
+        {
+            AddUnderLock(kind, "handler_settled", ingress, outcome);
+            // A fault's trigger must be the NEXT event in the same ordered
+            // ring. Previously two lock acquisitions let another concurrent
+            // fault slip between a settlement and its incident marker.
+            if (outcome == "faulted")
+                MarkIncidentUnderLock("document_handler_faulted");
+        }
     }
 
     internal FlightRecorderTriggerAck Trigger(FlightRecorderTriggerRequest? request, bool initialized)
@@ -91,14 +97,18 @@ internal sealed class LspFlightRecorder(
     private string MarkIncident(string reason)
     {
         lock (_gate)
-        {
-            var stamp = AddUnderLock("incident", "trigger", null, reason);
-            _incidentSequence = stamp.Sequence;
-            _incidentId = "incident-" + stamp.Sequence.ToString(
-                "D6", System.Globalization.CultureInfo.InvariantCulture);
-            _incidentReason = reason;
-            return _incidentId;
-        }
+            return MarkIncidentUnderLock(reason);
+    }
+
+    // Called under _gate from either manual Trigger or fault settlement.
+    private string MarkIncidentUnderLock(string reason)
+    {
+        var stamp = AddUnderLock("incident", "trigger", null, reason);
+        _incidentSequence = stamp.Sequence;
+        _incidentId = "incident-" + stamp.Sequence.ToString(
+            "D6", System.Globalization.CultureInfo.InvariantCulture);
+        _incidentReason = reason;
+        return _incidentId;
     }
 
     private void Add(string kind, string stage, long? ingress, string? outcome)

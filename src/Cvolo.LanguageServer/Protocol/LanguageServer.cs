@@ -482,6 +482,7 @@ internal sealed class LanguageServer(
                         flightCheckpointStatus = RecordingControlPlane.FlightCheckpointStatusMethod,
                         flightCheckpointRecovery = RecordingControlPlane.FlightCheckpointRecoveryMethod,
                         flightPerformanceReport = RecordingControlPlane.FlightPerformanceMethod,
+                        flightCausalReport = RecordingControlPlane.FlightCausalMethod,
                         triggerFlightRecorder = RecordingControlPlane.FlightTriggerMethod,
                         flightRecorderMetadataOnly = true,
                         inMemoryCaptureJournalSupported = true,
@@ -651,6 +652,14 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.FlightPerformanceMethod)]
     public FlightPerformanceEvidence GetFlightPerformanceReport()
         => RecordingControl.InspectFlightPerformance();
+
+    /// <summary>
+    /// Only confirmed same-process handler lifecycles and automatic trigger
+    /// edges. Critical path and underlying fault root cause remain unknown.
+    /// </summary>
+    [JsonRpcMethod(RecordingControlPlane.FlightCausalMethod)]
+    public FlightCausalEvidence GetFlightCausalReport()
+        => RecordingControl.InspectFlightCausality();
 
     /// <summary>Explicit incident marker, usable while normal recording is off.</summary>
     [JsonRpcMethod(RecordingControlPlane.FlightTriggerMethod,

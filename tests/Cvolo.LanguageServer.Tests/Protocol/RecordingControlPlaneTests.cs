@@ -733,6 +733,21 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Flight_causal_RPC_does_not_claim_unobserved_root_cause_or_critical_path()
+    {
+        using var session = ProtocolSession.Start();
+        await session.Client.InitializeAsync();
+        JObject result = await session.Client.GetFlightCausalReportAsync();
+        Assert.Equal("partial", (string?)result["coverage"]);
+        Assert.Equal("unknown", (string?)result["rootCause"]);
+        Assert.False((bool)result["rootCauseProven"]!);
+        Assert.False((bool)result["endToEndCriticalPathProven"]!);
+        Assert.False((bool)result["transportToHandlerCorrelationProven"]!);
+        Assert.Equal(0, (int)result["matchedHandlerLifecycleEdges"]!);
+        Assert.DoesNotContain("file:///", result.ToString());
+    }
+
+    [Fact]
     public async Task Flight_performance_RPC_exposes_monotonic_limited_metadata()
     {
         using var session = ProtocolSession.Start();
