@@ -733,6 +733,21 @@ public sealed class RecordingControlPlaneTests
     }
 
     [Fact]
+    public async Task Flight_performance_RPC_exposes_monotonic_limited_metadata()
+    {
+        using var session = ProtocolSession.Start();
+        await session.Client.InitializeAsync();
+        JObject report = await session.Client.GetFlightPerformanceReportAsync();
+        Assert.Equal("partial", (string?)report["coverage"]);
+        Assert.Equal(0, (int)report["matchedDurations"]!);
+        Assert.Equal("same_process_only", (string?)report["monotonicClockScope"]);
+        Assert.False((bool)report["causalCriticalPathProven"]!);
+        Assert.False((bool)report["endToEndLatencyProven"]!);
+        Assert.False((bool)report["allOperationsCapturedProven"]!);
+        Assert.DoesNotContain("file:///", report.ToString());
+    }
+
+    [Fact]
     public async Task Flight_trigger_is_validated_even_without_normal_recording()
     {
         using var session = ProtocolSession.Start();

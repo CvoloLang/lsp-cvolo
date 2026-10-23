@@ -6,12 +6,14 @@ namespace Cvolo.LanguageServer.Observability;
 /// A fixed machine vocabulary is enforced at the recording boundary.
 /// This ring is volatile: process termination loses its contents.
 /// </summary>
-internal sealed class LspFlightRecorder(Func<DateTimeOffset>? clock = null)
+internal sealed class LspFlightRecorder(
+    Func<DateTimeOffset>? clock = null, Func<long>? monotonicTicks = null)
 {
     internal const int MaxEvents = 128;
     internal static readonly TimeSpan Retention = TimeSpan.FromMinutes(3);
 
     private readonly Func<DateTimeOffset> _utcNow = clock ?? (() => DateTimeOffset.UtcNow);
+    private readonly Func<long> _monotonicTicks = monotonicTicks ?? System.Diagnostics.Stopwatch.GetTimestamp;
     private readonly object _gate = new();
     private readonly List<FlightRecorderEvent> _events = [];
     private long _sequence;
@@ -118,7 +120,8 @@ internal sealed class LspFlightRecorder(Func<DateTimeOffset>? clock = null)
 
         // No user-supplied payload or timestamps from other processes.
         var entry = new FlightRecorderEvent(
-            ++_sequence, now, kind, stage, ingress is > 0 ? ingress : null, outcome);
+            ++_sequence, now, kind, stage, ingress is > 0 ? ingress : null, outcome,
+            _monotonicTicks());
         _events.Add(entry);
         return entry;
     }
@@ -146,7 +149,8 @@ internal sealed record FlightRecorderTriggerAck(
 
 internal sealed record FlightRecorderEvent(
     long Sequence, DateTimeOffset ObservedAtUtc,
-    string Kind, string Stage, long? IngressSequence, string? Outcome);
+    string Kind, string Stage, long? IngressSequence, string? Outcome,
+    long? MonotonicTicks = null);
 
 internal sealed record FlightRecorderSnapshot(
     int ProtocolVersion, string Status, IReadOnlyList<FlightRecorderEvent> Events,

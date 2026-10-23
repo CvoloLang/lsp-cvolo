@@ -218,6 +218,69 @@ public sealed class LspFlightRecorderTests
     }
 
     [Fact]
+    public void Performance_report_uses_monotonic_clock_and_union_of_overlapping_handlers()
+    {
+        DateTimeOffset utc = new(2026, 10, 23, 8, 0, 0, TimeSpan.Zero);
+        long ticks = 0;
+        long millisecond = System.Diagnostics.Stopwatch.Frequency / 1000;
+        var recorder = new LspFlightRecorder(() => utc, () => ticks);
+        recorder.OnHandlerEntered("did_change", 1); // [0, 20]
+        ticks += 10 * millisecond;
+        recorder.OnHandlerEntered("did_change", 2); // [10, 30]
+        ticks += 10 * millisecond;
+        recorder.OnHandlerSettled("did_change", "applied", 1);
+        ticks += 10 * millisecond;
+        recorder.OnHandlerSettled("did_change", "rejected", 2);
+        var report = FlightPerformanceAnalyzer.Analyze(recorder.Inspect());
+
+        Assert.Equal("observed_only", report.Coverage);
+        Assert.Equal(2, report.MatchedDurations);
+        Assert.Equal(1, report.RejectedSettlements);
+        Assert.InRange(report.SumObservedHandlerTimeMs, 39, 41);
+        Assert.InRange(report.ObservedBusyTimeMs, 29, 31);
+        Assert.InRange(report.P95HandlerTimeMs!.Value, 19, 21);
+        Assert.False(report.EndToEndLatencyProven);
+        Assert.False(report.CausalCriticalPathProven);
+        Assert.False(report.AllOperationsCapturedProven);
+    }
+
+    [Fact]
+    public void Missing_entry_clock_regression_and_unmatched_settlement_are_partial_evidence()
+    {
+        long ticks = 1000;
+        var recorder = new LspFlightRecorder(
+            monotonicTicks: () => ticks);
+        recorder.OnHandlerEntered("did_open", 2);
+        ticks = 900;
+        recorder.OnHandlerSettled("did_open", "faulted", 2);
+        recorder.OnHandlerSettled("did_change", "rejected", 77);
+        recorder.OnHandlerEntered("did_close", 4);
+        var report = FlightPerformanceAnalyzer.Analyze(recorder.Inspect());
+
+        Assert.Equal("partial", report.Coverage);
+        Assert.Equal(1, report.InvalidClockPairs);
+        Assert.Equal(1, report.UnmatchedSettlements);
+        Assert.Equal(1, report.UnsettledHandlerEntries);
+        Assert.Equal(1, report.FaultedSettlements);
+        Assert.Equal(0, report.MatchedDurations);
+    }
+
+    [Fact]
+    public void Overwritten_history_never_claims_complete_performance_coverage()
+    {
+        var recorder = new LspFlightRecorder();
+        recorder.OnHandlerEntered("did_open", 1);
+        for (int i = 0; i < LspFlightRecorder.MaxEvents + 3; i++)
+            recorder.OnTransportNotification("textDocument/didChange");
+        recorder.OnHandlerSettled("did_open", "applied", 1);
+        var report = FlightPerformanceAnalyzer.Analyze(recorder.Inspect());
+        Assert.Equal("partial", report.Coverage);
+        Assert.True(report.SnapshotHistoryTruncated);
+        Assert.Equal(1, report.UnmatchedSettlements);
+        Assert.False(report.CausalCriticalPathProven);
+    }
+
+    [Fact]
     public void Ring_is_bounded_and_reports_overwritten_prefix()
     {
         var recorder = new LspFlightRecorder();

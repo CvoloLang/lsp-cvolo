@@ -481,6 +481,7 @@ internal sealed class LanguageServer(
                         flightIncidentIndex = RecordingControlPlane.FlightIncidentIndexMethod,
                         flightCheckpointStatus = RecordingControlPlane.FlightCheckpointStatusMethod,
                         flightCheckpointRecovery = RecordingControlPlane.FlightCheckpointRecoveryMethod,
+                        flightPerformanceReport = RecordingControlPlane.FlightPerformanceMethod,
                         triggerFlightRecorder = RecordingControlPlane.FlightTriggerMethod,
                         flightRecorderMetadataOnly = true,
                         inMemoryCaptureJournalSupported = true,
@@ -642,6 +643,14 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.FlightCheckpointRecoveryMethod)]
     public FlightCheckpointRecovery GetFlightCheckpointRecovery()
         => RecordingControl.InspectRecoveredFlightCheckpoint();
+
+    /// <summary>
+    /// Bounded same-process handler performance evidence. No fabricated
+    /// end-to-end latency, full capture, or causal critical path guarantees.
+    /// </summary>
+    [JsonRpcMethod(RecordingControlPlane.FlightPerformanceMethod)]
+    public FlightPerformanceEvidence GetFlightPerformanceReport()
+        => RecordingControl.InspectFlightPerformance();
 
     /// <summary>Explicit incident marker, usable while normal recording is off.</summary>
     [JsonRpcMethod(RecordingControlPlane.FlightTriggerMethod,
