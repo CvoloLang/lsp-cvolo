@@ -171,6 +171,53 @@ public sealed class LspFlightRecorderTests
     }
 
     [Fact]
+    public void Recovery_skips_corrupted_latest_file_and_uses_previous_verified_checkpoint()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "cvolo-flight-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var first = new LspFlightRecorder();
+            first.OnHandlerSettled("did_open", "faulted", 1);
+            var store = new FlightCheckpointStore(directory);
+            Assert.True(store.Write(first.Inspect()).FilePublished);
+            string earlier = Assert.Single(Directory.GetFiles(directory, "*.json"));
+            var later = new LspFlightRecorder();
+            later.OnTransportNotification("textDocument/didChange");
+            later.OnHandlerSettled("did_change", "faulted", 2);
+            Assert.True(store.Write(later.Inspect()).FilePublished);
+            string newest = Assert.Single(Directory.GetFiles(directory, "*.json")
+                .Where(path => path != earlier));
+            File.WriteAllText(newest, "{ broken");
+            var result = new FlightCheckpointStore(directory).RecoverLatest();
+            Assert.Equal("verified_metadata_recovered", result.Status);
+            Assert.Equal(first.Inspect().IncidentId, result.IncidentId);
+            Assert.True(result.ValidCheckpointRecovered);
+            Assert.False(result.AllProcessHistoryRecovered);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Repeated_incidents_keep_no_more_than_eight_published_files()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "cvolo-flight-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var recorder = new LspFlightRecorder();
+            var store = new FlightCheckpointStore(directory);
+            for (int i = 0; i < FlightCheckpointStore.MaxFiles + 4; i++)
+            {
+                recorder.OnHandlerSettled("did_change", "faulted", i + 1);
+                Assert.True(store.Write(recorder.Inspect()).FilePublished);
+            }
+            Assert.Equal(FlightCheckpointStore.MaxFiles,
+                Directory.GetFiles(directory, "*.json").Length);
+            Assert.Empty(Directory.GetFiles(directory, "*.partial"));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
     public void Ring_is_bounded_and_reports_overwritten_prefix()
     {
         var recorder = new LspFlightRecorder();
