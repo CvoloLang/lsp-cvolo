@@ -58,7 +58,9 @@ class RealCollectorContractTests(unittest.TestCase):
             "document_symbol", "file:///synthetic/main.cvl")
         self.assertEqual("textDocument/documentSymbol", method)
         self.assertEqual({"textDocument": {"uri": "file:///synthetic/main.cvl"}}, params)
-        self.assertTrue(collector.valid_workload_result("document_symbol", []))
+        self.assertTrue(collector.valid_workload_result(
+            "document_symbol", [{"name": "Main", "kind": 12}]))
+        self.assertFalse(collector.valid_workload_result("document_symbol", []))
         self.assertFalse(collector.valid_workload_result("document_symbol", None))
         self.assertFalse(collector.valid_workload_result("completion", []))
 
