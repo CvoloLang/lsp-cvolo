@@ -348,6 +348,15 @@ def exploratory_summary(data):
         all_samples[mode] = samples
 
     baseline = percentile(all_samples["off"], .95)
+    # Use the same fixed, reviewed noise threshold as the evaluator. This is
+    # descriptive only: shared GitHub hosts cannot establish a stable baseline.
+    from evaluate_inc33_perf import SPEC_PATH
+    spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    per_run_off = [
+        percentile(run["samplesUs"]["off"], .95) for run in data["runs"]
+    ]
+    baseline_spread = (max(per_run_off) - min(per_run_off)) / baseline
+    noisy_baseline = baseline_spread > spec["maxBaselineRelativeCiWidth"]
     summaries = {}
     for mode, samples in all_samples.items():
         p95 = percentile(samples, .95)
@@ -365,6 +374,10 @@ def exploratory_summary(data):
         "missingModes": ["repro"],
         "latencyScope": "client_observed_lsp_round_trip",
         "perMode": summaries,
+        "baselineRelativeP95RunSpread": round(baseline_spread, 6),
+        "baselineNoiseThreshold": spec["maxBaselineRelativeCiWidth"],
+        "noisyBaseline": noisy_baseline,
+        "observedLatencyBudgetVerdict": "INCONCLUSIVE",
         "confidenceBoundedBudgetVerdict": False,
         "normativeRegressionPass": False,
     }
