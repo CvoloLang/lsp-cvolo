@@ -339,6 +339,23 @@ def exploratory_summary(data):
     }
 
 
+def incomplete_collection_evidence(error):
+    """Safe classified failure, never source text, stderr or absolute paths."""
+    raw = str(error) if isinstance(error, BenchmarkFailure) else ""
+    code = raw if re.fullmatch(r"[a-z0-9_]{1,80}", raw) else "unclassified_error"
+    return {
+        "schemaVersion": 1,
+        "status": "INCONCLUSIVE",
+        "reason": "collection_failed",
+        "failureCode": code,
+        "sampleScope": "none",
+        "normativeBudgetApproved": False,
+        "allWorkloadsComplete": False,
+        "endToEndRegressionGatePassed": False,
+        "noMeasuredSamplesPublished": True,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", required=True,
@@ -369,7 +386,15 @@ def main():
         print("Normative 4-mode gate: INCONCLUSIVE (missing_or_duplicated_mode).")
         return 0
     except (BenchmarkFailure, OSError, subprocess.SubprocessError) as error:
-        # Never dump RPC bodies/paths. A failed run must not publish results.
+        # A failed run is NOT_RUN/INCONCLUSIVE, never a silent success or
+        # stale output from a previous run. Export only whitelisted fields;
+        # exception text and raw JSON-RPC frames can contain sensitive data.
+        args.output.unlink(missing_ok=True)
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(
+            json.dumps(incomplete_collection_evidence(error), indent=2) + "\n",
+            encoding="utf-8",
+        )
         print("Benchmark collection failed: " + type(error).__name__,
               file=sys.stderr)
         return 2
