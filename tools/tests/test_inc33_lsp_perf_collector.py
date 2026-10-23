@@ -30,6 +30,38 @@ class RealCollectorContractTests(unittest.TestCase):
         payload = {"jsonrpc": "2.0", "id": 1, "result": {"x": 4}}
         self.assertEqual(payload, collector.read_frame(io.BytesIO(collector.frame(payload))))
 
+    def test_short_pipe_reads_are_combined_into_one_frame(self):
+        class FragmentedReader:
+            def __init__(self, data):
+                self.inner = io.BytesIO(data)
+            def readline(self, size=-1):
+                return self.inner.readline(size)
+            def read(self, size=-1):
+                return self.inner.read(min(size, 3))
+        payload = {"jsonrpc": "2.0", "id": 2, "result": {"items": []}}
+        self.assertEqual(payload,
+            collector.read_frame(FragmentedReader(collector.frame(payload))))
+
+    def test_did_open_readiness_requires_applied_settlement(self):
+        class StubProcess:
+            def __init__(self, outcomes):
+                self.outcomes = iter(outcomes)
+            def call(self, method):
+                self.method = method
+                return 1, {"events": next(self.outcomes)}
+        pending = [{"kind": "did_open", "stage": "handler_entered"}]
+        applied = [{"kind": "did_open", "stage": "handler_settled",
+                    "outcome": "applied"}]
+        stub = StubProcess([pending, applied])
+        collector.wait_for_document_applied(stub, 2)
+        self.assertEqual("cvolo/observability/flightRecorderSnapshot.v1", stub.method)
+
+        rejected = StubProcess([[{"kind": "did_open", "stage": "handler_settled",
+                                  "outcome": "rejected"}]])
+        with self.assertRaisesRegex(collector.BenchmarkFailure,
+                                    "benchmark_document_open_rejected"):
+            collector.wait_for_document_applied(rejected, 2)
+
     def test_duplicate_content_length_is_rejected(self):
         sample = b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}"
         with self.assertRaises(collector.BenchmarkFailure):
