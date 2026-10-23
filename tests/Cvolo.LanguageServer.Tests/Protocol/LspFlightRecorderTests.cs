@@ -107,6 +107,69 @@ public sealed class LspFlightRecorderTests
         Assert.True(index.Incidents[0].WindowTruncated);
     }
 
+
+    [Fact]
+    public void Private_checkpoint_is_written_verified_and_recovered_by_new_store()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "cvolo-flight-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var flight = new LspFlightRecorder();
+            flight.OnTransportNotification("textDocument/didOpen");
+            flight.OnHandlerEntered("did_open", 13);
+            flight.OnHandlerSettled("did_open", "faulted", 13);
+            var writer = new FlightCheckpointStore(directory);
+            var write = writer.Write(flight.Inspect());
+            Assert.Equal("verified_file_published", write.Status);
+            Assert.True(write.VerifiedAfterWrite);
+            Assert.False(write.DirectorySyncProven);
+            Assert.False(write.PendingWriteSurvivesCrash);
+
+            var newProcessStore = new FlightCheckpointStore(directory);
+            var recovered = newProcessStore.RecoverLatest();
+            Assert.True(recovered.ValidCheckpointRecovered);
+            Assert.Equal(flight.Inspect().IncidentId, recovered.IncidentId);
+            Assert.False(recovered.AllProcessHistoryRecovered);
+            byte[] bytes = File.ReadAllBytes(Assert.Single(Directory.GetFiles(directory, "*.json")));
+            Assert.True(FlightCheckpointStore.Validate(bytes));
+            Assert.DoesNotContain("C:/", System.Text.Encoding.UTF8.GetString(bytes));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Tampered_checkpoint_is_never_reported_as_recovered()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "cvolo-flight-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var flight = new LspFlightRecorder();
+            flight.OnHandlerSettled("did_change", "faulted", 9);
+            var store = new FlightCheckpointStore(directory);
+            Assert.True(store.Write(flight.Inspect()).FilePublished);
+            string path = Assert.Single(Directory.GetFiles(directory, "*.json"));
+            byte[] bytes = File.ReadAllBytes(path);
+            using var json = System.Text.Json.JsonDocument.Parse(bytes);
+            string changed = System.Text.Encoding.UTF8.GetString(bytes)
+                .Replace("document_handler_faulted", "manual");
+            File.WriteAllText(path, changed);
+            Assert.Equal("no_valid_checkpoint", new FlightCheckpointStore(directory).RecoverLatest().Status);
+            Assert.False(FlightCheckpointStore.Validate(System.Text.Encoding.UTF8.GetBytes(changed)));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void Untriggered_history_cannot_be_persisted()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "cvolo-flight-" + Guid.NewGuid().ToString("N"));
+        var flight = new LspFlightRecorder();
+        flight.OnHandlerEntered("did_open", 2);
+        var status = new FlightCheckpointStore(directory).Write(flight.Inspect());
+        Assert.Equal("no_retained_incident", status.FailureReason);
+        Assert.False(Directory.Exists(directory));
+    }
+
     [Fact]
     public void Ring_is_bounded_and_reports_overwritten_prefix()
     {

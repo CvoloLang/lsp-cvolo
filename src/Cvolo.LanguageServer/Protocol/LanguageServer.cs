@@ -479,6 +479,8 @@ internal sealed class LanguageServer(
                         verifyCaptureCheckpoint = RecordingControlPlane.VerifyCheckpointMethod,
                         flightRecorderSnapshot = RecordingControlPlane.FlightSnapshotMethod,
                         flightIncidentIndex = RecordingControlPlane.FlightIncidentIndexMethod,
+                        flightCheckpointStatus = RecordingControlPlane.FlightCheckpointStatusMethod,
+                        flightCheckpointRecovery = RecordingControlPlane.FlightCheckpointRecoveryMethod,
                         triggerFlightRecorder = RecordingControlPlane.FlightTriggerMethod,
                         flightRecorderMetadataOnly = true,
                         inMemoryCaptureJournalSupported = true,
@@ -632,6 +634,14 @@ internal sealed class LanguageServer(
     [JsonRpcMethod(RecordingControlPlane.FlightIncidentIndexMethod)]
     public FlightIncidentIndex GetFlightIncidentIndex()
         => RecordingControl.InspectFlightIncidentIndex();
+
+    [JsonRpcMethod(RecordingControlPlane.FlightCheckpointStatusMethod)]
+    public FlightCheckpointStatus GetFlightCheckpointStatus()
+        => RecordingControl.InspectFlightCheckpoint();
+
+    [JsonRpcMethod(RecordingControlPlane.FlightCheckpointRecoveryMethod)]
+    public FlightCheckpointRecovery GetFlightCheckpointRecovery()
+        => RecordingControl.InspectRecoveredFlightCheckpoint();
 
     /// <summary>Explicit incident marker, usable while normal recording is off.</summary>
     [JsonRpcMethod(RecordingControlPlane.FlightTriggerMethod,

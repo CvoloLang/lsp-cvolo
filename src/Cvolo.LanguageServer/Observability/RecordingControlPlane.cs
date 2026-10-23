@@ -27,12 +27,28 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
     internal const string FlightSnapshotMethod = "cvolo/observability/flightRecorderSnapshot.v1";
     internal const string FlightTriggerMethod = "cvolo/observability/triggerFlightRecorder.v1";
     internal const string FlightIncidentIndexMethod = "cvolo/observability/flightIncidentIndex.v1";
+    internal const string FlightCheckpointStatusMethod = "cvolo/observability/flightCheckpointStatus.v1";
+    internal const string FlightCheckpointRecoveryMethod = "cvolo/observability/flightCheckpointRecovery.v1";
 
     private readonly CompilerObserver? _runtime = observer as CompilerObserver;
     private readonly LspObservabilitySession? _session = session;
     private readonly object _gate = new();
     private readonly CaptureConsentState _captureConsent = new();
     private readonly LspFlightRecorder _flightRecorder = new();
+    private readonly FlightCheckpointStore _flightCheckpoint = new();
+
+    internal FlightCheckpointStatus InspectFlightCheckpoint() => _flightCheckpoint.Inspect();
+    internal FlightCheckpointRecovery InspectRecoveredFlightCheckpoint()
+        => _flightCheckpoint.RecoverLatest();
+
+    private void PersistIncidentBestEffort()
+    {
+        FlightRecorderSnapshot snapshot = _flightRecorder.Inspect();
+        if (snapshot.IncidentId is null) return;
+        // I/O must never block the LSP input lane; the snapshot cannot claim
+        // crash survival until the file is verified after the rename.
+        _ = Task.Run(() => _flightCheckpoint.Write(snapshot));
+    }
 
     internal FlightRecorderSnapshot InspectFlightRecorder() => _flightRecorder.Inspect();
 
@@ -41,7 +57,12 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
 
     internal FlightRecorderTriggerAck TriggerFlightRecorder(
         FlightRecorderTriggerRequest? request, bool initialized)
-        => _flightRecorder.Trigger(request, initialized);
+    {
+        var ack = _flightRecorder.Trigger(request, initialized);
+        if (ack.Status == "captured_in_memory")
+            PersistIncidentBestEffort();
+        return ack;
+    }
 
     internal bool Supported => _runtime is not null;
 
@@ -315,6 +336,8 @@ internal sealed class RecordingControlPlane(ICompilerObserver observer, LspObser
         Uri? uri, string kind, string outcome, int? version, long? ingressSequence)
     {
         _flightRecorder.OnHandlerSettled(kind, outcome, ingressSequence);
+        if (outcome == "faulted")
+            PersistIncidentBestEffort();
         _captureConsent.CaptureSettled(uri, kind, outcome, version, ingressSequence);
     }
 
