@@ -25,6 +25,12 @@ on:
 permissions:
   contents: read
 
+# Two experiments on the same benchmark branch must not contend for hosted
+# runners at the same time. Never cancel one run to manufacture a PASS.
+concurrency:
+  group: inc33-lsp-performance-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   measure:
     strategy:
