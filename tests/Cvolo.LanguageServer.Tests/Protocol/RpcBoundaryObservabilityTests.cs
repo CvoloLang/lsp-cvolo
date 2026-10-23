@@ -142,6 +142,46 @@ public sealed class RpcBoundaryObservabilityTests
     }
 
     [Fact]
+    public async Task Numeric_and_string_request_ids_with_same_digits_never_share_correlation()
+    {
+        var (observer, queue) = CreateObserver();
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync().ConfigureAwait(false);
+        Drain(queue);
+
+        // Both legal JSON-RPC ID types have identical printable digits.
+        // The transport must preserve their distinct UIDs, including when
+        // responses arrive in a different order than the two requests.
+        session.Client.SendRawJson(
+            "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":731,\\"method\\":\\"cvolo/unknownRequest\\",\\"params\\":null}");
+        session.Client.SendRawJson(
+            "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":\\"731\\",\\"method\\":\\"cvolo/unknownRequest\\",\\"params\\":null}");
+
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return events.Count(e => e.Event.Event == "rpc.request.received") == 2
+                && events.Count(e => e.Event.Event == "rpc.response.sent") == 2;
+        }, "paired numeric and string request id responses");
+
+        var received = events.Where(e => e.Event.Event == "rpc.request.received").ToArray();
+        var sent = events.Where(e => e.Event.Event == "rpc.response.sent").ToArray();
+        Assert.Equal(2, received.Select(e => e.Event.RequestUid)
+            .Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains(received, e => e.Event.RpcRequestId!.Value.Type == "number");
+        Assert.Contains(received, e => e.Event.RpcRequestId!.Value.Type == "string");
+        foreach (var request in received)
+        {
+            var response = Assert.Single(sent, e => e.Event.RequestUid == request.Event.RequestUid);
+            Assert.Equal(request.Event.RpcRequestId, response.Event.RpcRequestId);
+        }
+
+        Assert.Equal(0, observer.Catalog!.UnknownEvents);
+        Assert.Equal(0, observer.Catalog!.MissingFields);
+    }
+
+    [Fact]
     public async Task Concurrent_requests_keep_distinct_uids_and_pair_one_to_one()
     {
         var (observer, queue) = CreateObserver();
