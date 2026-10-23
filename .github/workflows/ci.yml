@@ -79,6 +79,20 @@ jobs:
       - name: Test standalone diagnostic analyzer
         run: python -m unittest discover -s tools/tests -v
 
+      - name: Inc 3.3 performance smoke contract
+        shell: bash
+        run: |
+          python tools/evaluate_inc33_perf.py --report test-evidence/performance-smoke.json
+          python -c "import json; p=json.load(open('test-evidence/performance-smoke.json')); assert p['status']=='NOT_RUN' and not p['endToEndRegressionGatePassed']"
+
+      - name: Upload Inc 3.3 performance smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inc33-perf-smoke-${{ matrix.os }}
+          path: test-evidence/performance-smoke.json
+          if-no-files-found: warn
+
       - name: Restore (locked)
         run: dotnet restore src/Cvolo.LanguageServer.slnx --locked-mode -p:ContinuousIntegrationBuild=true
 

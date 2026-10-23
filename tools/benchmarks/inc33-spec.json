@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "normativeSource": "Inc 3.3 v4.1 §17 §47 §61 §65 OBS-AUD-017",
+  "metric": "request_latency_us",
+  "percentiles": [
+    50,
+    95,
+    99
+  ],
+  "targetP95OverheadPercent": {
+    "basic": 2,
+    "detailed": 5,
+    "repro": 10
+  },
+  "minRepetitions": 8,
+  "minSamplesPerMode": 400,
+  "bootstrapReplicates": 300,
+  "bootstrapSeed": 33017,
+  "maxBaselineRelativeCiWidth": 0.08,
+  "modeOrder": [
+    "off",
+    "basic",
+    "detailed",
+    "repro"
+  ],
+  "workloads": [
+    "cold_start",
+    "warm_cache",
+    "did_change_100",
+    "completion",
+    "definition",
+    "semantic_tokens",
+    "diagnostics",
+    "package_navigation",
+    "concurrent_requests",
+    "lock_contention",
+    "source_export"
+  ],
+  "fixtureClasses": [
+    "small",
+    "medium",
+    "large"
+  ],
+  "finalBudgetApproved": false,
+  "controlledHostRequired": true
+}
