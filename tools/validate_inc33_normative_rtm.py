@@ -130,10 +130,52 @@ def validate(matrix, interim, root=ROOT, require_complete=False):
     return problems
 
 
+def render_markdown(matrix):
+    rows = matrix["requirements"]
+
+    def escape(value):
+        return str(value).replace("|", r"\|").replace("\n", " ").strip()
+
+    def count(status):
+        return sum(x.get("status") == status for x in rows)
+
+    lines = [
+        "# Inc 3.3 v4.1 — normative requirements/test matrix",
+        "",
+        "Generated from `tools/acceptance/inc33-normative-rtm.json` (the source of truth).",
+        "The 68 §45 scenarios plus 19 §65 scenarios are a **complete ID inventory**, NOT completed acceptance.",
+        "A linked test alone establishes only partial coverage. `PASS` requires test/evidence/build/platform provenance and the release gate.",
+        "",
+        (f"**Inventory:** {len(rows)} scenarios · {count('PASS')} PASS · "
+         f"{count('PARTIAL')} PARTIAL · {count('BLOCKED')} BLOCKED · "
+         f"{count('FAIL')} FAIL."),
+        "",
+        "| Requirement | Section | Component | Status | Existing test links | Scenario | Normative oracle |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for x in rows:
+        linked = ", ".join("`" + t + "`" for t in x["testIds"]) if x["testIds"] else "—"
+        lines.append(
+            f"| {escape(x['requirementId'])} | {escape(x['sourceSection'])} "
+            f"| {escape(x['component'])} | {x['status']} | {linked} "
+            f"| {escape(x['description'])} | {escape(x['oracle'])} |"
+        )
+    lines.extend([
+        "",
+        "**Release acceptance remains BLOCKED** until every normative scenario has complete evidence, the independent functional oracle, platform verification, and a verified build SHA.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def run(require_complete=False):
     matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
     interim = json.loads(INTERIM.read_text(encoding="utf-8"))
-    return validate(matrix, interim, require_complete=require_complete)
+    problems = validate(matrix, interim, require_complete=require_complete)
+    generated_path = ROOT / "docs" / "diagnostics" / "requirements-test-matrix.md"
+    if not generated_path.is_file() or generated_path.read_text(encoding="utf-8") != render_markdown(matrix):
+        problems.append("human-readable RTM is missing or differs from normative JSON")
+    return problems
 
 
 if __name__ == "__main__":
