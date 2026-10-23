@@ -153,9 +153,9 @@ public sealed class RpcBoundaryObservabilityTests
         // The transport must preserve their distinct UIDs, including when
         // responses arrive in a different order than the two requests.
         session.Client.SendRawJson(
-            "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":731,\\"method\\":\\"cvolo/unknownRequest\\",\\"params\\":null}");
+            """{"jsonrpc":"2.0","id":731,"method":"cvolo/unknownRequest","params":null}""");
         session.Client.SendRawJson(
-            "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":\\"731\\",\\"method\\":\\"cvolo/unknownRequest\\",\\"params\\":null}");
+            """{"jsonrpc":"2.0","id":"731","method":"cvolo/unknownRequest","params":null}""");
 
         var events = new List<StampedEvent>();
         await session.Client.WaitUntilAsync(() =>
