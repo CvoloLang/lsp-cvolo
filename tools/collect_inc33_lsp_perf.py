@@ -77,10 +77,18 @@ def read_frame(stream):
         raise BenchmarkFailure("missing_content_length") from error
     if length < 0 or length > MAX_MESSAGE_BYTES:
         raise BenchmarkFailure("invalid_frame_length")
-    data = stream.read(length)
-    if len(data) != length:
-        raise EOFError("short_server_frame")
-    result = json.loads(data)
+    # Unbuffered subprocess pipes may legitimately return fewer bytes than
+    # requested. Collect exactly Content-Length, otherwise benchmark runs can
+    # fail nondeterministically with a false short-frame classification.
+    chunks = []
+    remaining = length
+    while remaining:
+        chunk = stream.read(remaining)
+        if not chunk:
+            raise EOFError("short_server_frame")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    result = json.loads(b"".join(chunks))
     if not isinstance(result, dict):
         raise BenchmarkFailure("non_object_rpc_message")
     return result
@@ -184,6 +192,22 @@ def server_provenance(command):
     return sha
 
 
+def wait_for_document_applied(process, timeout):
+    """A sent didOpen is not proof that concurrent dispatch has settled."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        _, snapshot = process.call("cvolo/observability/flightRecorderSnapshot.v1")
+        if not isinstance(snapshot, dict):
+            raise BenchmarkFailure("invalid_flight_snapshot")
+        for event in snapshot.get("events", []):
+            if event.get("kind") == "did_open" and event.get("stage") == "handler_settled":
+                if event.get("outcome") != "applied":
+                    raise BenchmarkFailure("benchmark_document_open_rejected")
+                return
+        time.sleep(.02)
+    raise BenchmarkFailure("document_open_not_confirmed")
+
+
 def execute_mode(command, mode, project_uri, document_uri, source, timeout,
                  warmup, samples):
     process = RpcProcess(command, timeout)
@@ -199,6 +223,7 @@ def execute_mode(command, mode, project_uri, document_uri, source, timeout,
             "textDocument": {"uri": document_uri, "languageId": "cvolo",
                              "version": 1, "text": source},
         })
+        wait_for_document_applied(process, timeout)
         _, policy = process.call("cvolo/observability/setRecording.v1", {
             "protocolVersion": 1, "mode": mode, "captureSources": False,
             "capturePaths": False, "forensicScope": False,
@@ -212,10 +237,15 @@ def execute_mode(command, mode, project_uri, document_uri, source, timeout,
             "position": {"line": 0, "character": 4},
             "context": {"triggerKind": 1},
         }
+        def completion():
+            elapsed, result = process.call("textDocument/completion", request)
+            if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+                raise BenchmarkFailure("completion_result_invalid_or_unavailable")
+            return round(elapsed, 3)
+
         for _ in range(warmup):
-            process.call("textDocument/completion", request)
-        return [round(process.call("textDocument/completion", request)[0], 3)
-                for _ in range(samples)]
+            completion()
+        return [completion() for _ in range(samples)]
     finally:
         process.close()
 
@@ -252,7 +282,10 @@ def collect(command, repetitions=8, samples=50, warmup=10, timeout=20):
         "workload": "completion", "fixtureClass": "small",
         "fixtureSha256": fixture_sha, "buildSha": sha,
         "host": {"os": platform.system(), "cpu": platform.processor() or
-                 platform.machine(), "runnerId": platform.node() or "unknown"},
+                 platform.machine(),
+                 "runnerId": "runner-" + hashlib.sha256(
+                     (platform.node() or "unknown").encode("utf-8")
+                 ).hexdigest()[:16]},
         "sdk": sdk, "runs": runs,
         "unsupportedMode": "repro", "captureScope": "non_sensitive",
         "correlationScope": "client_observed_round_trip",
