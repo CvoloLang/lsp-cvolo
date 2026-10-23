@@ -79,6 +79,107 @@ public sealed class ReproSourceBundleTests
     }
 
     [Fact]
+    public void Recomputed_sha_cannot_smuggle_unknown_root_or_record_fields()
+    {
+        var bundle = MinimalBundle();
+        var extraRoot = RewriteManifest(bundle.Bytes, json =>
+            json["sourceAbsolutePath"] = "C:/private/workspace/main.cvl");
+        var extraRecord = RewriteManifest(bundle.Bytes, json =>
+            json["snapshots"]!.AsArray()[0]!["documentUri"] =
+                "file:///private/workspace/main.cvl");
+        foreach (var altered in new[] { extraRoot, extraRecord })
+        {
+            var evidence = ReproSourceBundle.Verify(altered.Archive, altered.ManifestHash);
+            Assert.False(evidence.IntegrityValid);
+            Assert.Equal("invalid_manifest_schema", evidence.Reason);
+        }
+    }
+
+    [Fact]
+    public void Nested_edit_metadata_must_not_accept_sensitive_unknown_properties()
+    {
+        var bundle = EditedBundle();
+        var altered = RewriteManifest(bundle.Bytes, json =>
+            json["snapshots"]!.AsArray()[1]!["changes"]!.AsArray()[0]!["workspacePath"]
+                = "/home/user/private-project");
+        var evidence = ReproSourceBundle.Verify(altered.Archive, altered.ManifestHash);
+        Assert.False(evidence.IntegrityValid);
+        Assert.Equal("invalid_manifest_schema", evidence.Reason);
+    }
+
+    [Fact]
+    public void Duplicate_json_keys_are_rejected_even_when_manifest_hash_matches()
+    {
+        var bundle = MinimalBundle();
+        var mutated = RewriteRawManifest(bundle.Bytes, raw =>
+            raw.Replace("\"documentId\": \"doc-0001\"",
+                "\"documentId\": \"doc-0001\", \"documentId\": \"doc-0001\"",
+                StringComparison.Ordinal));
+        var result = ReproSourceBundle.Verify(mutated.Archive, mutated.ManifestHash);
+        Assert.False(result.IntegrityValid);
+        Assert.Equal("invalid_manifest_schema", result.Reason);
+    }
+
+    [Fact]
+    public void Missing_or_null_snapshot_records_are_not_accepted_as_repro()
+    {
+        var bundle = MinimalBundle();
+        var missing = RewriteManifest(bundle.Bytes, json =>
+            json.AsObject().Remove("scope"));
+        var nullRecord = RewriteManifest(bundle.Bytes, json =>
+            json["snapshots"]!.AsArray()[0] = null);
+        foreach (var altered in new[] { missing, nullRecord })
+        {
+            var result = ReproSourceBundle.Verify(altered.Archive, altered.ManifestHash);
+            Assert.False(result.IntegrityValid);
+            Assert.Equal("invalid_manifest_schema", result.Reason);
+        }
+    }
+
+    private static ReproBundleBytes EditedBundle()
+    {
+        CapturedDocumentSnapshot[] snapshots =
+        [
+            new(Uri, 1, "before",
+                CaptureReplayVerifier.ComputeDigest("before"), true, null, 1),
+            new(Uri, 2, "after",
+                CaptureReplayVerifier.ComputeDigest("after"), false,
+                [new DocumentChange(null, "after")], 2),
+        ];
+        return ReproSourceBundle.Build(new CaptureExportSnapshot(
+            "lease", snapshots, CaptureReplayVerifier.Inspect(snapshots, true)));
+    }
+
+    private static (byte[] Archive, string ManifestHash) RewriteRawManifest(
+        byte[] archive, Func<string, string> mutate)
+    {
+        using var input = new ZipArchive(new MemoryStream(archive), ZipArchiveMode.Read);
+        using var reader = new StreamReader(input.GetEntry("repro-manifest.json")!.Open());
+        string original = reader.ReadToEnd();
+        string changed = mutate(original);
+        Assert.NotEqual(original, changed);
+        byte[] manifestBytes = Encoding.UTF8.GetBytes(changed);
+        string hash = Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant();
+        using var output = new MemoryStream();
+        using (var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var entry in input.Entries)
+            {
+                var target = zip.CreateEntry(entry.FullName);
+                using Stream stream = target.Open();
+                if (entry.FullName == "repro-manifest.json")
+                    stream.Write(manifestBytes);
+                else
+                {
+                    using Stream originalStream = entry.Open();
+                    originalStream.CopyTo(stream);
+                }
+            }
+        }
+        return (output.ToArray(), hash);
+    }
+
+    [Fact]
     public void Recomputed_manifest_hash_does_not_authorize_raw_document_paths()
     {
         var bundle = MinimalBundle();

@@ -127,6 +127,12 @@ internal static class ReproSourceBundle
             if (!string.Equals(Hash(manifestBytes), expectedManifestHash,
                 StringComparison.OrdinalIgnoreCase))
                 return new(false, "manifest_hash_mismatch", 0, false);
+            // Hashes are not schema validation: JsonSerializer silently
+            // ignores unknown fields (including sensitive paths), accepts
+            // duplicate names and uses defaults for omitted members. Refuse
+            // such manifests before typed deserialization.
+            if (!HasCanonicalManifestSchema(manifestBytes))
+                return new(false, "invalid_manifest_schema", 0, false);
             ReproSourceManifest? manifest =
                 JsonSerializer.Deserialize<ReproSourceManifest>(manifestBytes, Json);
             if (manifest is null || manifest.FormatVersion != FormatVersion
@@ -244,6 +250,74 @@ internal static class ReproSourceBundle
         {
             return new(false, "archive_read_failed", 0, false);
         }
+    }
+
+    /// <summary>
+    /// Schema-closed source export: reject unknown, missing or duplicate JSON
+    /// properties at ALL nested levels, not only the root. This prevents
+    /// recalculated checksums from blessing arbitrary user/workspace metadata
+    /// in otherwise valid ZIPs. The protocol is versioned, so new fields must
+    /// explicitly update the schema and its tests.
+    /// </summary>
+    private static bool HasCanonicalManifestSchema(byte[] raw)
+    {
+        using JsonDocument doc = JsonDocument.Parse(raw,
+            new JsonDocumentOptions { MaxDepth = 12 });
+        JsonElement root = doc.RootElement;
+        if (!ExactFields(root,
+            "formatVersion", "format", "hashAlgorithm", "textDigestAlgorithm",
+            "snapshots", "traceCompleteness", "documentReplayCompleteness",
+            "projectInputsCompleteness", "semanticReplayCompleteness",
+            "containsSensitiveSources", "replayComplete", "transportProducerClosed",
+            "projectClosureVerified", "semanticClosureVerified", "scope",
+            "completenessLimitations"))
+            return false;
+        JsonElement snapshots = root.GetProperty("snapshots");
+        if (snapshots.ValueKind != JsonValueKind.Array
+            || snapshots.GetArrayLength() > CaptureConsentState.MaxJournalSnapshots)
+            return false;
+        foreach (JsonElement record in snapshots.EnumerateArray())
+        {
+            if (!ExactFields(record,
+                "documentId", "documentSessionId", "kind", "version",
+                "ingressSequence", "sourceEntry", "sourceSha256",
+                "utf16Sha256", "changes"))
+                return false;
+            JsonElement changes = record.GetProperty("changes");
+            if (changes.ValueKind == JsonValueKind.Null)
+                continue;
+            if (changes.ValueKind != JsonValueKind.Array
+                || changes.GetArrayLength() > 4096)
+                return false;
+            foreach (JsonElement change in changes.EnumerateArray())
+            {
+                if (!ExactFields(change, "range", "text"))
+                    return false;
+                JsonElement range = change.GetProperty("range");
+                if (range.ValueKind == JsonValueKind.Null)
+                    continue;
+                if (!ExactFields(range, "start", "end"))
+                    return false;
+                if (!ExactFields(range.GetProperty("start"), "line", "character")
+                    || !ExactFields(range.GetProperty("end"), "line", "character"))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool ExactFields(JsonElement obj, params string[] allowed)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+            return false;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (JsonProperty field in obj.EnumerateObject())
+        {
+            if (!allowed.Contains(field.Name, StringComparer.Ordinal)
+                || !seen.Add(field.Name))
+                return false;
+        }
+        return seen.Count == allowed.Length;
     }
 
     private static bool IsIncompleteStatus(string? status)
