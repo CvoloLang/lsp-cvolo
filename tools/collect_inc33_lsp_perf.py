@@ -236,8 +236,71 @@ def valid_workload_result(workload, result):
     return False
 
 
+RESOURCE_METHOD = "cvolo/observability/flightResourceSnapshot.v1"
+CUMULATIVE_RESOURCE_FIELDS = (
+    "processCpuTimeTicks", "totalAllocatedBytes",
+    "gen0Collections", "gen1Collections", "gen2Collections",
+)
+GAUGE_RESOURCE_FIELDS = ("managedHeapBytes", "workingSetBytes")
+
+
+def resource_deltas(first, last, measured_count):
+    """Process-wide counters around measured requests. Not attribution.
+
+    Both snapshots are requested OUTSIDE the timed samples. Managed heap and
+    working set are point samples rather than high-water marks, and CPU time
+    includes background work by unrelated server threads.
+    """
+    if (not isinstance(first, dict) or not isinstance(last, dict)
+        or not isinstance(measured_count, int) or measured_count <= 0):
+        raise BenchmarkFailure("invalid_resource_snapshot")
+    for snap in (first, last):
+        if (snap.get("protocolVersion") != 1
+            or snap.get("scope") != "same_process_cumulative_non_atomic"
+            or any(snap.get(name) is not False for name in (
+                "resourceAttributionToRequestProven",
+                "isolatedCpuMeasurementProven", "peakMemoryObserved"))):
+            raise BenchmarkFailure("invalid_resource_scope")
+        required = ("monotonicTicks", "monotonicFrequency",
+                    *CUMULATIVE_RESOURCE_FIELDS, *GAUGE_RESOURCE_FIELDS)
+        for key in required:
+            value = snap.get(key)
+            if type(value) is not int or value < 0:
+                raise BenchmarkFailure("invalid_resource_counter")
+    if (first["monotonicFrequency"] <= 0
+        or first["monotonicFrequency"] != last["monotonicFrequency"]
+        or last["monotonicTicks"] <= first["monotonicTicks"]):
+        raise BenchmarkFailure("invalid_resource_clock")
+
+    deltas = {}
+    for name in CUMULATIVE_RESOURCE_FIELDS:
+        difference = last[name] - first[name]
+        if difference < 0:
+            raise BenchmarkFailure("resource_counter_regressed")
+        deltas[name + "Delta"] = difference
+    elapsed_us = ((last["monotonicTicks"] - first["monotonicTicks"])
+                  * 1_000_000 / first["monotonicFrequency"])
+    deltas.update({
+        "sampleIntervalUs": round(elapsed_us, 3),
+        "processCpuTimeUs": round(deltas["processCpuTimeTicksDelta"] / 10, 3),
+        "allocatedBytesPerRequest": round(
+            deltas["totalAllocatedBytesDelta"] / measured_count, 3),
+        "processCpuUsPerRequest": round(
+            deltas["processCpuTimeTicksDelta"] / 10 / measured_count, 3),
+        "managedHeapBytesBefore": first["managedHeapBytes"],
+        "managedHeapBytesAfter": last["managedHeapBytes"],
+        "workingSetBytesBefore": first["workingSetBytes"],
+        "workingSetBytesAfter": last["workingSetBytes"],
+        "attribution": "process_wide_not_per_request",
+        "sampling": "two_non_atomic_points_excluding_timed_samples",
+        "peakMemoryObserved": False,
+        "regressionBudgetPass": False,
+    })
+    return deltas
+
+
 def execute_mode(command, mode, project_uri, document_uri, source, timeout,
-                 warmup, samples, workload="completion"):
+                 warmup, samples, workload="completion", resource_sink=None):
     process = RpcProcess(command, timeout)
     try:
         _, init = process.call("initialize", {
@@ -273,7 +336,13 @@ def execute_mode(command, mode, project_uri, document_uri, source, timeout,
 
         for _ in range(warmup):
             measured_request()
-        return [measured_request() for _ in range(samples)]
+        _, before = process.call(RESOURCE_METHOD)
+        latencies = [measured_request() for _ in range(samples)]
+        _, after = process.call(RESOURCE_METHOD)
+        resources = resource_deltas(before, after, samples)
+        if resource_sink is not None:
+            resource_sink.update(resources)
+        return latencies
     finally:
         process.close()
 
@@ -300,11 +369,15 @@ def collect(command, repetitions=8, samples=50, warmup=10, timeout=20,
         for repetition in range(repetitions):
             order = alternating_modes(repetition)
             values = {}
+            resources = {}
             for mode in order:
+                mode_resources = {}
                 values[mode] = execute_mode(command, mode, project_uri, doc_uri,
-                    source, timeout, warmup, samples, workload)
+                    source, timeout, warmup, samples, workload, mode_resources)
+                resources[mode] = mode_resources
             runs.append({"repetition": repetition,
-                         "modeOrder": order, "samplesUs": values})
+                         "modeOrder": order, "samplesUs": values,
+                         "processResourceDeltas": resources})
     sdk = subprocess.run(["dotnet", "--version"], timeout=15,
                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                          check=True).stdout.decode("ascii", errors="replace").strip()
@@ -321,6 +394,8 @@ def collect(command, repetitions=8, samples=50, warmup=10, timeout=20,
         "unsupportedMode": "repro", "captureScope": "non_sensitive",
         "correlationScope": "client_observed_round_trip",
         "completeNormativeEvidence": False,
+        "resourceSamplingScope": "process_wide_cpu_gc_allocation_and_two_memory_points",
+        "resourceAttributionToRequestsProven": False,
     }
 
 
