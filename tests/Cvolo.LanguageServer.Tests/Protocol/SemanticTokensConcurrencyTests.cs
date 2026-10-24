@@ -264,6 +264,13 @@ public class SemanticTokensConcurrencyTests : IDisposable
             _session.Client.SemanticTokensAsync(Uri("a.cvl")),
         ];
         Assert.True(_backend.WaitUntilNavigationEntered(TimeSpan.FromSeconds(5)), "backend semantic tokens should be entered");
+        // One admitted backend call does NOT prove that all 3 requests have
+        // captured the old document version. A later request may legitimately
+        // enter after the edits and succeed, so only classify all 3 as stale
+        // after their old-generation backend work has actually started.
+        await _session.Client.WaitUntilAsync(
+            () => _backend.SemanticTokensCalls >= inFlight.Length,
+            "all pre-edit semantic-token requests entered the backend");
 
         // The user keeps typing while every request is still in flight.
         for (var version = 2; version <= 4; version++)
