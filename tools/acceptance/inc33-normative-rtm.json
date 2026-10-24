@@ -826,7 +826,8 @@
       "coveredMethods": [],
       "eventIds": [],
       "testIds": [
-        "LSP33-RPC-06"
+        "LSP33-RPC-06",
+        "LSP33-LSP-03"
       ],
       "testType": "partial_xunit_or_python",
       "oracle": "stdout содержит только валидные framed protocol messages, tracing не добавляет bytes",
@@ -835,7 +836,7 @@
       "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Existing stdout framing test covers normal instrumented RPC; all modes including writer failure require separate evidence."
+      "knownLimitations": "Real subprocess stdout framing after simulated writer-open failure now has a regression test, but tracing across all modes, writer crash/drop, and complete protocol-byte coverage still need evidence."
     },
     {
       "requirementId": "OBS-LSP-010",
@@ -845,15 +846,17 @@
       "description": "Headless LSP, startup/shutdown/restart/parent process loss",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-LSP-02"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "Есть new serverInstanceIds, terminal или crash-incomplete, graceful no-client handling",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Actual subprocess initialization, shutdown and restart produce a fresh serverInstanceId. Parent-process loss and crash-incomplete evidence still require full normative tests."
     },
     {
       "requirementId": "OBS-LSP-011",
@@ -863,15 +866,17 @@
       "description": "Динамическое переключение logging без запуска нового server",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-LSP-01"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "Переход наблюдаем, mode действует в неизменном PID; старые Lazy не ретроактивно описаны",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Subprocess mode transitions, disk writer state, epochs and stable process identity are tested. Old Lazy snapshot construction and no-retroactive analysis traces remain to be proven."
     },
     {
       "requirementId": "OBS-VSC-001",

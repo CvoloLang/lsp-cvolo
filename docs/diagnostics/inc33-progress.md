@@ -7,18 +7,18 @@ A technical fix, implemented test, green CI or exploratory benchmark
 does not count as normative PASS without a complete scenario oracle,
 platform evidence, a verified build SHA and an auditable evidence artifact.
 
-**Current acceptance:** 0/87 PASS; 20 PARTIAL; 67 BLOCKED; 0 FAIL.
+**Current acceptance:** 0/87 PASS; 22 PARTIAL; 65 BLOCKED; 0 FAIL.
 
 | Fixed family | Normative cases | PASS | PARTIAL | BLOCKED | FAIL |
 |---|---:|---:|---:|---:|---:|
 | CORE — Telemetry kernel | 10 | 0 | 2 | 8 | 0 |
 | CON — Concurrency and integration | 12 | 0 | 0 | 12 | 0 |
 | COMP — Compiler / Tooling / CLI | 14 | 0 | 0 | 14 | 0 |
-| LSP — Language Server | 11 | 0 | 3 | 8 | 0 |
+| LSP — Language Server | 11 | 0 | 5 | 6 | 0 |
 | VSC — Installed VS Code extension | 6 | 0 | 0 | 6 | 0 |
 | IO — Recording, replay and analysis | 15 | 0 | 7 | 8 | 0 |
 | AUD — Release audit | 19 | 0 | 8 | 11 | 0 |
-| **TOTAL** | **87** | **0** | **20** | **67** | **0** |
+| **TOTAL** | **87** | **0** | **22** | **65** | **0** |
 
 ## Permanent acceptance checklist
 
@@ -82,8 +82,8 @@ belong under these IDs rather than increasing the total number of stages.
 - [ ] `OBS-LSP-007` **BLOCKED** — Completion/hover/signature/rename/references/tokens/inlay/other handlers
 - [ ] `OBS-LSP-008` **PARTIAL** — Concurrent JSON-RPC requests с числовым и строковым id
 - [ ] `OBS-LSP-009` **PARTIAL** — JSON-RPC stdout hygiene при всех режимах, включая writer failure
-- [ ] `OBS-LSP-010` **BLOCKED** — Headless LSP, startup/shutdown/restart/parent process loss
-- [ ] `OBS-LSP-011` **BLOCKED** — Динамическое переключение logging без запуска нового server
+- [ ] `OBS-LSP-010` **PARTIAL** — Headless LSP, startup/shutdown/restart/parent process loss
+- [ ] `OBS-LSP-011` **PARTIAL** — Динамическое переключение logging без запуска нового server
 
 ### VSC — Installed VS Code extension
 

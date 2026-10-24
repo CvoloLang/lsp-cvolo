@@ -401,6 +401,33 @@
       }
     },
     {
+      "id": "LSP33-LSP-01",
+      "title": "Real LSP process switches recording modes, retains server identity and epoch without restart",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/EndToEnd/ProcessLifecycleTests.cs",
+        "method": "RealProcess_RecordingTransitionsRetainPidIdentityAndEpoch"
+      }
+    },
+    {
+      "id": "LSP33-LSP-02",
+      "title": "Real LSP restart yields new serverInstanceId and off-mode initial epoch",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/EndToEnd/ProcessLifecycleTests.cs",
+        "method": "RealProcess_RestartGivesFreshServerIdentityAndOffEpoch"
+      }
+    },
+    {
+      "id": "LSP33-LSP-03",
+      "title": "Real process writer failure leaves stdout valid and recording disabled",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/EndToEnd/ProcessLifecycleTests.cs",
+        "method": "RealProcess_FailedWriterStartKeepsStdoutFramedAndModeOff"
+      }
+    },
+    {
       "id": "LSP33-GAP-01",
       "title": "Transport frame identity preserved through dispatch and handler",
       "state": "open",
