@@ -190,6 +190,13 @@ public class CodeActionProcessTests
             server.SendJson(JsonRpcFrames.Notification("textDocument/didOpen",
                 $"{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"cvolo\",\"version\":1,\"text\":\"{Escape(text)}\"}}}}"));
 
+            // didOpen is a notification, not a completion barrier. A fast
+            // codeAction can reach the server before the document was applied.
+            // Wait for the real diagnostic publication for this URI before
+            // asking the compiler to synthesize the missing-field fix.
+            await WaitForPublishAsync(server, uri, list => list.Count >= 1)
+                .WithTimeout("initial missing-field diagnostic publication");
+
             const string initializer = "Window { Width = 1 }";
             int start = text.IndexOf(initializer, StringComparison.Ordinal);
             (int line, int character) = OffsetToPosition(text, start);
