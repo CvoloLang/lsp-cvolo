@@ -411,7 +411,7 @@ public sealed class RpcBoundaryObservabilityTests
         await session.Client.NotifyInitializedAsync().ConfigureAwait(false);
         var uri = workspace.DocumentUri("a.cvl");
         var coreUri = DocumentUri.Create(workspace.PathOf("a.cvl"));
-        await session.Client.NotifyDidOpenAsync(uri, "cvolo", 1, "int main() { return 0; }\\n");
+        await session.Client.NotifyDidOpenAsync(uri, "cvolo", 1, "int main() { return 0; }\n");
         await session.Client.WaitUntilAsync(() => store.TryGet(coreUri, out _), "open test document");
         Drain(queue);
 
@@ -423,12 +423,12 @@ public sealed class RpcBoundaryObservabilityTests
         try
         {
             session.Client.SendRawJson(
-                $"""{"jsonrpc":"2.0","id":731,"method":"textDocument/definition","params":{"textDocument":{"uri":{{wireUri}}},"position":{"line":0,"character":4}}}""");
+                $$"""{"jsonrpc":"2.0","id":731,"method":"textDocument/definition","params":{"textDocument":{"uri":{{wireUri}}},"position":{"line":0,"character":4}}}""");
             Assert.True(backend.WaitUntilNavigationEntered(TimeSpan.FromSeconds(10)),
                 "definition must enter the blocked backend");
 
             session.Client.SendRawJson(
-                $"""{"jsonrpc":"2.0","id":"731","method":"textDocument/hover","params":{"textDocument":{"uri":{{wireUri}}},"position":{"line":0,"character":4}}}""");
+                $$"""{"jsonrpc":"2.0","id":"731","method":"textDocument/hover","params":{"textDocument":{"uri":{{wireUri}}},"position":{"line":0,"character":4}}}""");
 
             await session.Client.WaitUntilAsync(() =>
             {
