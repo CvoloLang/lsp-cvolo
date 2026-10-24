@@ -134,6 +134,12 @@ public class EditorIntelligenceProcessTests
 
         await WithServerAsync(text, RealisticClientCapabilities, async (server, uri, initialize) =>
         {
+            // didOpen is a notification (no ACK), so a fast request may race
+            // the diagnostic pipeline on a heavily loaded Windows runner.
+            // Wait for the observable publication for the actual file/version,
+            // not an arbitrary delay or a retry of a null semantic result.
+            await WaitForDocumentPublicationAsync(server, uri);
+
             var legend = initialize["result"]?["capabilities"]?["semanticTokensProvider"]?["legend"]?["tokenModifiers"] as JArray;
             Assert.NotNull(legend);
             var modifiers = legend!.Select(token => (string)token!).ToList();
@@ -143,7 +149,9 @@ public class EditorIntelligenceProcessTests
             server.SendJson(JsonRpcFrames.Request(3, "textDocument/semanticTokens/full",
                 $"{{\"textDocument\":{{\"uri\":\"{uri}\"}}}}"));
             JObject response = await server.WaitForResponseAsync(3).WithTimeout("semantic tokens response");
-            var data = response["result"]?["data"] as JArray;
+            Assert.Null(response["error"]);
+            var result = Assert.IsType<JObject>(response["result"]);
+            var data = result["data"] as JArray;
             Assert.NotNull(data);
 
             var tokens = DecodeTokens(data!);
@@ -193,6 +201,24 @@ public class EditorIntelligenceProcessTests
         """
         {"textDocument":{"semanticTokens":{"dynamicRegistration":false,"requests":{"range":true,"full":{"delta":true}},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":false,"serverCancelSupport":true,"augmentsSyntaxTokens":true}}}
         """;
+
+    private static async Task WaitForDocumentPublicationAsync(ServerProcess server, string uri)
+    {
+        var expected = new Uri(uri);
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (DiagnosticFrames.ForUri(server.SnapshotFrames(), expected)
+                .Any(p => p.Version is null or 1))
+                return;
+
+            await Task.Delay(20);
+        }
+
+        Assert.Fail("didOpen did not publish diagnostics for version 1. " +
+            "The semantic-tokens readiness oracle cannot be established. " +
+            server.GetStderrText());
+    }
 
     private static async Task WithServerAsync(string text, Func<ServerProcess, string, Task> body) =>
         await WithServerAsync(text, capabilities: null, (server, uri, _) => body(server, uri));
