@@ -97,6 +97,45 @@ public class DefinitionObservabilityTests : IDisposable
         Assert.Equal(0, _observer.Catalog!.MissingFields);
     }
 
+    [Theory]
+    [InlineData("hover")]
+    [InlineData("completion")]
+    [InlineData("signatureHelp")]
+    [InlineData("references")]
+    public async Task Closed_document_feature_requests_have_distinct_terminal_traces(string feature)
+    {
+        await StartAsync();
+        // No didOpen: each feature must terminate with a machine-readable
+        // reason rather than a null RPC response without observability.
+        Uri uri = Uri("a.cvl");
+        switch (feature)
+        {
+            case "hover":
+                Assert.Null(await _session.Client.HoverAsync(uri, 0, 4).WithTimeout("hover"));
+                break;
+            case "completion":
+                var completion = await _session.Client.CompletionAsync(uri, 0, 4).WithTimeout("completion");
+                Assert.True(completion is null || completion.Items is { Length: 0 });
+                break;
+            case "signatureHelp":
+                Assert.Null(await _session.Client.SignatureHelpAsync(uri, 0, 4).WithTimeout("signatureHelp"));
+                break;
+            case "references":
+                Assert.Null(await _session.Client.ReferencesAsync(uri, 0, 4).WithTimeout("references"));
+                break;
+        }
+
+        var events = Drain();
+        var started = Assert.Single(Named(events, "feature.request.started")
+            .Where(e => e.Event.Stage == feature));
+        var completed = Assert.Single(Named(events, "feature.request.completed")
+            .Where(e => e.Event.Stage == feature));
+        Assert.Equal(started.Event.OperationId, completed.Event.OperationId);
+        Assert.Equal("not_found", completed.Event.Outcome);
+        Assert.Equal("document_not_open", completed.Event.Reason);
+        AssertCatalogClean();
+    }
+
     [Fact]
     public async Task SuccessfulNavigation_IsTracedFromPositionThroughResponse()
     {
