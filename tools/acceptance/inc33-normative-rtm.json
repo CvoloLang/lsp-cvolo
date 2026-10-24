@@ -711,15 +711,19 @@
       "description": "F12 unknown symbol / invalid position / missing source / invalid mapped target",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-LSP-04",
+        "LSP33-LSP-05",
+        "LSP33-LSP-06"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "Четыре distinct reason branches + response; terminal outcome согласован с branch",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Tests cover unknown symbol, invalid position, and malformed mapped target through an in-process LSP session. Missing package source and full four-branch subprocess oracle remain unverified."
     },
     {
       "requirementId": "OBS-LSP-004",
@@ -729,15 +733,18 @@
       "description": "Request cancelled before queue / during lazy wait / after cancellation deferred",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-LSP-07",
+        "LSP33-LSP-08"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "`cancellation.requested/observed/deferred`, correct response and shared analysis integrity",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Request cancellation and unknown/completed cancellation IDs are tested. Before-queue, Lazy-wait and deferred-cancellation trace outcomes are not fully demonstrated."
     },
     {
       "requirementId": "OBS-LSP-005",
@@ -769,15 +776,18 @@
       "description": "Diagnostics publish/clear, generation changes, stale commit",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-LSP-09",
+        "LSP33-LSP-10"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "Только разрешённые публикации; отправка, failure и suppression различаются",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Real RPC publication and failed transport terminals have test evidence. Generation changes, clear behavior and stale diagnostic commit suppression need full acceptance."
     },
     {
       "requirementId": "OBS-LSP-007",

@@ -4,7 +4,7 @@ Generated from `tools/acceptance/inc33-normative-rtm.json` (the source of truth)
 The 68 §45 scenarios plus 19 §65 scenarios are a **complete ID inventory**, NOT completed acceptance.
 A linked test alone establishes only partial coverage. `PASS` requires test/evidence/build/platform provenance and the release gate.
 
-**Inventory:** 87 scenarios · 0 PASS · 22 PARTIAL · 65 BLOCKED · 0 FAIL.
+**Inventory:** 87 scenarios · 0 PASS · 25 PARTIAL · 62 BLOCKED · 0 FAIL.
 
 | Requirement | Section | Component | Status | Existing test links | Scenario | Normative oracle |
 |---|---|---|---|---|---|---|
@@ -46,10 +46,10 @@ A linked test alone establishes only partial coverage. `PASS` requires test/evid
 | OBS-COMP-014 | §45.3 | Compiler/Tooling/CLI | BLOCKED | — | Глубина инструментации coverage | L0 для 100% инвентаризованных API; L1 для обязательного перечня из §31.1; остальное `partial/on_demand`, не `covered` |
 | OBS-LSP-001 | §45.4 | LanguageServer | BLOCKED | — | F12 found within project (integration subprocess) | Клиент получил expected location, trace содержит request/snapshot/symbol/map/send |
 | OBS-LSP-002 | §45.4 | LanguageServer | BLOCKED | — | F12 found in package source | Получена ожидаемая source URI+range; package identity/source mapping подтверждены |
-| OBS-LSP-003 | §45.4 | LanguageServer | BLOCKED | — | F12 unknown symbol / invalid position / missing source / invalid mapped target | Четыре distinct reason branches + response; terminal outcome согласован с branch |
-| OBS-LSP-004 | §45.4 | LanguageServer | BLOCKED | — | Request cancelled before queue / during lazy wait / after cancellation deferred | `cancellation.requested/observed/deferred`, correct response and shared analysis integrity |
+| OBS-LSP-003 | §45.4 | LanguageServer | PARTIAL | `LSP33-LSP-04`, `LSP33-LSP-05`, `LSP33-LSP-06` | F12 unknown symbol / invalid position / missing source / invalid mapped target | Четыре distinct reason branches + response; terminal outcome согласован с branch |
+| OBS-LSP-004 | §45.4 | LanguageServer | PARTIAL | `LSP33-LSP-07`, `LSP33-LSP-08` | Request cancelled before queue / during lazy wait / after cancellation deferred | `cancellation.requested/observed/deferred`, correct response and shared analysis integrity |
 | OBS-LSP-005 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPL-01`, `LSP33-RPL-03`, `LSP33-RPL-05` | DidOpen/DidChange/DidClose/DidSave и смешанные edits | Серверная последовательность, версии и text hashes соответствуют inputs; old snapshot не объявлен current |
-| OBS-LSP-006 | §45.4 | LanguageServer | BLOCKED | — | Diagnostics publish/clear, generation changes, stale commit | Только разрешённые публикации; отправка, failure и suppression различаются |
+| OBS-LSP-006 | §45.4 | LanguageServer | PARTIAL | `LSP33-LSP-09`, `LSP33-LSP-10` | Diagnostics publish/clear, generation changes, stale commit | Только разрешённые публикации; отправка, failure и suppression различаются |
 | OBS-LSP-007 | §45.4 | LanguageServer | BLOCKED | — | Completion/hover/signature/rename/references/tokens/inlay/other handlers | Каждая feature имеет trace и expected payload; outcome/reason даже при `null` |
 | OBS-LSP-008 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPC-05` | Concurrent JSON-RPC requests с числовым и строковым id | Нет перепутывания request IDs и trace context; не используются unsafe globals |
 | OBS-LSP-009 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPC-06`, `LSP33-LSP-03` | JSON-RPC stdout hygiene при всех режимах, включая writer failure | stdout содержит только валидные framed protocol messages, tracing не добавляет bytes |

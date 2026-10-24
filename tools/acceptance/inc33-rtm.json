@@ -428,6 +428,69 @@
       }
     },
     {
+      "id": "LSP33-LSP-04",
+      "title": "Definition misses report an explicit symbol-not-found reason",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DefinitionObservabilityTests.cs",
+        "method": "UnknownSymbol_RecordsSymbolLookupMiss"
+      }
+    },
+    {
+      "id": "LSP33-LSP-05",
+      "title": "Invalid F12 position is rejected with reason and terminal",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DefinitionObservabilityTests.cs",
+        "method": "InvalidPosition_RecordsInvalidPosition"
+      }
+    },
+    {
+      "id": "LSP33-LSP-06",
+      "title": "Malformed F12 target is rejected without corrupting valid responses",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DefinitionObservabilityTests.cs",
+        "method": "MalformedTarget_RejectsOnlyThatTargetAndStillResponds"
+      }
+    },
+    {
+      "id": "LSP33-LSP-07",
+      "title": "Cancellation does not terminate LSP session",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CancellationTests.cs",
+        "method": "CancelRequest_DoesNotCorruptLaterRequests_AndNeverCrashes"
+      }
+    },
+    {
+      "id": "LSP33-LSP-08",
+      "title": "Cancellation of completed and unknown IDs is harmless",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/CancellationTests.cs",
+        "method": "CancelUnknownOrCompletedRequest_IsHarmless"
+      }
+    },
+    {
+      "id": "LSP33-LSP-09",
+      "title": "Diagnostics transport publication emits counted send terminal",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Diagnostics/DiagnosticPipelineObservabilityTests.cs",
+        "method": "Publication_is_bracketed_by_attempt_and_sent_with_counts"
+      }
+    },
+    {
+      "id": "LSP33-LSP-10",
+      "title": "Diagnostics transport faults remain distinct from successful sends",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Diagnostics/DiagnosticPipelineObservabilityTests.cs",
+        "method": "Failed_diagnostic_transport_keeps_the_originating_analysis_id"
+      }
+    },
+    {
       "id": "LSP33-GAP-01",
       "title": "Transport frame identity preserved through dispatch and handler",
       "state": "open",
