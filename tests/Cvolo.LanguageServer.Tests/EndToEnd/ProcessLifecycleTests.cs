@@ -89,6 +89,60 @@ public class ProcessLifecycleTests
                 Assert.Equal(JTokenType.Object, JObject.Parse(line).Type);
             // Verify no private source content was needed to toggle modes.
             Assert.DoesNotContain("cvolo-lsp-mode-e2e-", string.Join("\n", lines));
+            Assert.DoesNotContain("cvolo/unknownRequest", string.Join("\n", lines));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RealProcess_FailedWriterStartKeepsStdoutFramedAndModeOff()
+    {
+        // Deliberately pass a directory as the output file: creating a JSONL
+        // FileStream fails without requiring root permissions or disk filling.
+        string directory = Path.Combine(Path.GetTempPath(),
+            "cvolo-lsp-writer-fault-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var server = ServerProcess.StartWithEnvironment(
+                new Dictionary<string, string?>
+                {
+                    ["CVOLO_OBS_MODE"] = "off",
+                    ["CVOLO_TRACE_PATH"] = directory,
+                }, "--stdio");
+            await InitializeProcessAsync(server);
+            JObject initial = await RequestRecordingStatusAsync(server, 50);
+            Assert.Equal("off", (string?)initial["effectiveMode"]);
+
+            JObject failed = await RequestRecordingModeAsync(server, 51, "detailed");
+            Assert.Equal("rejected", (string?)failed["status"]);
+            Assert.Equal("writer_open_failed", (string?)failed["reason"]);
+            Assert.Equal("off", (string?)failed["effectiveMode"]);
+            Assert.Equal(0, (long)failed["recordingEpoch"]!);
+            Assert.False((bool)failed["diskRecordingActive"]!);
+
+            JObject after = await RequestRecordingStatusAsync(server, 52);
+            Assert.Equal("off", (string?)after["effectiveMode"]);
+            Assert.Equal((string?)initial["serverInstanceId"],
+                (string?)after["serverInstanceId"]);
+            Assert.False(server.HasExited);
+
+            server.SendJson(JsonRpcFrames.Request(53, "shutdown", "null"));
+            Assert.Equal(JTokenType.Null,
+                (await server.WaitForResponseAsync(53, TimeSpan.FromSeconds(20)))["result"]!.Type);
+            server.SendJson(JsonRpcFrames.Notification("exit", "null"));
+            Assert.Equal(0, await server.WaitForExitAsync(TimeSpan.FromSeconds(20)));
+
+            byte[] stdout = await server.WaitForStdoutStableAsync(TimeSpan.FromSeconds(10));
+            (List<string> messages, int consumed) = FrameParser.Parse(stdout);
+            Assert.Equal(stdout.Length, consumed);
+            Assert.NotEmpty(messages);
+            foreach (string message in messages)
+                Assert.Equal("2.0", JObject.Parse(message)["jsonrpc"]?.Value<string>());
         }
         finally
         {
