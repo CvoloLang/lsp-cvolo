@@ -4,7 +4,7 @@ Generated from `tools/acceptance/inc33-normative-rtm.json` (the source of truth)
 The 68 §45 scenarios plus 19 §65 scenarios are a **complete ID inventory**, NOT completed acceptance.
 A linked test alone establishes only partial coverage. `PASS` requires test/evidence/build/platform provenance and the release gate.
 
-**Inventory:** 87 scenarios · 0 PASS · 26 PARTIAL · 61 BLOCKED · 0 FAIL.
+**Inventory:** 87 scenarios · 0 PASS · 27 PARTIAL · 60 BLOCKED · 0 FAIL.
 
 | Requirement | Section | Component | Status | Existing test links | Scenario | Normative oracle |
 |---|---|---|---|---|---|---|
@@ -50,7 +50,7 @@ A linked test alone establishes only partial coverage. `PASS` requires test/evid
 | OBS-LSP-004 | §45.4 | LanguageServer | PARTIAL | `LSP33-LSP-07`, `LSP33-LSP-08` | Request cancelled before queue / during lazy wait / after cancellation deferred | `cancellation.requested/observed/deferred`, correct response and shared analysis integrity |
 | OBS-LSP-005 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPL-01`, `LSP33-RPL-03`, `LSP33-RPL-05`, `LSP33-LSP-12` | DidOpen/DidChange/DidClose/DidSave и смешанные edits | Серверная последовательность, версии и text hashes соответствуют inputs; old snapshot не объявлен current |
 | OBS-LSP-006 | §45.4 | LanguageServer | PARTIAL | `LSP33-LSP-09`, `LSP33-LSP-10` | Diagnostics publish/clear, generation changes, stale commit | Только разрешённые публикации; отправка, failure и suppression различаются |
-| OBS-LSP-007 | §45.4 | LanguageServer | BLOCKED | — | Completion/hover/signature/rename/references/tokens/inlay/other handlers | Каждая feature имеет trace и expected payload; outcome/reason даже при `null` |
+| OBS-LSP-007 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPC-07` | Completion/hover/signature/rename/references/tokens/inlay/other handlers | Каждая feature имеет trace и expected payload; outcome/reason даже при `null` |
 | OBS-LSP-008 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPC-05` | Concurrent JSON-RPC requests с числовым и строковым id | Нет перепутывания request IDs и trace context; не используются unsafe globals |
 | OBS-LSP-009 | §45.4 | LanguageServer | PARTIAL | `LSP33-RPC-06`, `LSP33-LSP-03` | JSON-RPC stdout hygiene при всех режимах, включая writer failure | stdout содержит только валидные framed protocol messages, tracing не добавляет bytes |
 | OBS-LSP-010 | §45.4 | LanguageServer | PARTIAL | `LSP33-LSP-02` | Headless LSP, startup/shutdown/restart/parent process loss | Есть new serverInstanceIds, terminal или crash-incomplete, graceful no-client handling |

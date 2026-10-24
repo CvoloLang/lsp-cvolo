@@ -509,6 +509,15 @@
       }
     },
     {
+      "id": "LSP33-RPC-07",
+      "title": "Closed-document hover/completion/signature/references return traced not_found outcomes",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DefinitionObservabilityTests.cs",
+        "method": "Closed_document_feature_requests_have_distinct_terminal_traces"
+      }
+    },
+    {
       "id": "LSP33-GAP-01",
       "title": "Transport frame identity preserved through dispatch and handler",
       "state": "open",

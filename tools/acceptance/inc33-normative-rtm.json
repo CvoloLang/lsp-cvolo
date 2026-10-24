@@ -800,15 +800,17 @@
       "description": "Completion/hover/signature/rename/references/tokens/inlay/other handlers",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-RPC-07"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "Каждая feature имеет trace и expected payload; outcome/reason даже при `null`",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Four closed-document feature families have terminal trace regression coverage on both CI platforms; successful payloads, null outcomes for every handler, other features and fault/cancellation oracles are not yet proven. Evidence: CI #40086869695 for ce017ec7."
     },
     {
       "requirementId": "OBS-LSP-008",
