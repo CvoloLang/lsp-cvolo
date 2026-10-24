@@ -554,6 +554,15 @@
       }
     },
     {
+      "id": "LSP33-LSP-16",
+      "title": "Verified isolated .cvlib Sector 1+5 F12 source mapping and editor package-source session reuse",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Backend/PackageSourceNavigationIntegrationTests.cs",
+        "method": "InstalledCvlib_F12CarriesPackageIdentity_AndOpeningSourceReusesPackageUniverse"
+      }
+    },
+    {
       "id": "LSP33-RPC-07",
       "title": "Closed-document hover/completion/signature/references return traced not_found outcomes",
       "state": "implemented_test",

@@ -695,15 +695,17 @@
       "description": "F12 found in package source",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-LSP-16"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "Получена ожидаемая source URI+range; package identity/source mapping подтверждены",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Real subprocess external SDK F12 was verified on Ubuntu/Windows (CI #40109948988, 4707a69), but SDK is NOT a .cvlib package source. No actual package-source fixture, expected package provenance/source URI/range or packaged-VSIX evidence exists. Normative package case remains BLOCKED."
+      "knownLimitations": "CI #40112548288 on ac6441d demonstrates Windows+Ubuntu an actual unsigned/Merkle-verified .cvlib (Sector 1 API + Sector 5 source) installed into an isolated cache, Tooling-defined package identity/version, exact source text and symbol selection span, and package-source session reuse after F12. The fixture seeds the owner through the compiler's internal cache-injection test hook; it is NOT a subprocess/installed-VSIX roundtrip, and independent exported JSONL/causal package evidence is still missing. Normative PASS remains blocked."
     },
     {
       "requirementId": "OBS-LSP-003",

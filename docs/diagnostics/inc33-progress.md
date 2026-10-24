@@ -7,18 +7,18 @@ A technical fix, implemented test, green CI or exploratory benchmark
 does not count as normative PASS without a complete scenario oracle,
 platform evidence, a verified build SHA and an auditable evidence artifact.
 
-**Current acceptance:** 0/87 PASS; 27 PARTIAL; 60 BLOCKED; 0 FAIL.
+**Current acceptance:** 0/87 PASS; 28 PARTIAL; 59 BLOCKED; 0 FAIL.
 
 | Fixed family | Normative cases | PASS | PARTIAL | BLOCKED | FAIL |
 |---|---:|---:|---:|---:|---:|
 | CORE — Telemetry kernel | 10 | 0 | 2 | 8 | 0 |
 | CON — Concurrency and integration | 12 | 0 | 0 | 12 | 0 |
 | COMP — Compiler / Tooling / CLI | 14 | 0 | 0 | 14 | 0 |
-| LSP — Language Server | 11 | 0 | 10 | 1 | 0 |
+| LSP — Language Server | 11 | 0 | 11 | 0 | 0 |
 | VSC — Installed VS Code extension | 6 | 0 | 0 | 6 | 0 |
 | IO — Recording, replay and analysis | 15 | 0 | 7 | 8 | 0 |
 | AUD — Release audit | 19 | 0 | 8 | 11 | 0 |
-| **TOTAL** | **87** | **0** | **27** | **60** | **0** |
+| **TOTAL** | **87** | **0** | **28** | **59** | **0** |
 
 ## Permanent acceptance checklist
 
@@ -74,7 +74,7 @@ belong under these IDs rather than increasing the total number of stages.
 ### LSP — Language Server
 
 - [ ] `OBS-LSP-001` **PARTIAL** — F12 found within project (integration subprocess)
-- [ ] `OBS-LSP-002` **BLOCKED** — F12 found in package source
+- [ ] `OBS-LSP-002` **PARTIAL** — F12 found in package source
 - [ ] `OBS-LSP-003` **PARTIAL** — F12 unknown symbol / invalid position / missing source / invalid mapped target
 - [ ] `OBS-LSP-004` **PARTIAL** — Request cancelled before queue / during lazy wait / after cancellation deferred
 - [ ] `OBS-LSP-005` **PARTIAL** — DidOpen/DidChange/DidClose/DidSave и смешанные edits
