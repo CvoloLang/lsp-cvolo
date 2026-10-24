@@ -759,7 +759,8 @@
       "testIds": [
         "LSP33-RPL-01",
         "LSP33-RPL-03",
-        "LSP33-RPL-05"
+        "LSP33-RPL-05",
+        "LSP33-LSP-12"
       ],
       "testType": "partial_xunit_or_python",
       "oracle": "Серверная последовательность, версии и text hashes соответствуют inputs; old snapshot не объявлен current",

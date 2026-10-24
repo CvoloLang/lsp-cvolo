@@ -500,6 +500,15 @@
       }
     },
     {
+      "id": "LSP33-LSP-12",
+      "title": "Protocol didOpen/change/close/reopen preserves session state and terminal telemetry",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DocumentSyncObservabilityTests.cs",
+        "method": "Close_then_reopen_preserves_terminal_outcomes_without_reusing_old_version"
+      }
+    },
+    {
       "id": "LSP33-GAP-01",
       "title": "Transport frame identity preserved through dispatch and handler",
       "state": "open",
