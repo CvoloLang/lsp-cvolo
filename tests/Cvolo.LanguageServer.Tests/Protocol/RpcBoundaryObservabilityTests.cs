@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Cvolo.LanguageServer.Core;
+using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Tests.TestSupport;
 using Cvolo.Observability;
 using Cvolo.Observability.Abstractions;
@@ -392,6 +393,95 @@ public sealed class RpcBoundaryObservabilityTests
         // appear in any structured telemetry attribute.
         Assert.DoesNotContain(events, e => e.Event.Attributes?.Any(a =>
             a.Value.Contains(secret, StringComparison.Ordinal)) == true);
+        Assert.Equal(0, observer.Catalog!.UnknownEvents);
+        Assert.Equal(0, observer.Catalog.MissingFields);
+    }
+
+
+    [Fact]
+    public async Task Numeric_and_string_ids_preserve_real_feature_context_during_overlapping_backend_calls()
+    {
+        using var workspace = TestWorkspace.CreateProject(["a.cvl"]);
+        var backend = new BlockingBackend();
+        var (observer, queue) = CreateObserver();
+        var store = new DocumentStore(backend, new RecordingCoreLogger(), observer: observer);
+        using var session = ProtocolSession.Start(storeFactory: () => store, observer: observer);
+
+        await session.Client.InitializeAsync().ConfigureAwait(false);
+        await session.Client.NotifyInitializedAsync().ConfigureAwait(false);
+        var uri = workspace.DocumentUri("a.cvl");
+        var coreUri = DocumentUri.Create(workspace.PathOf("a.cvl"));
+        await session.Client.NotifyDidOpenAsync(uri, "cvolo", 1, "int main() { return 0; }\\n");
+        await session.Client.WaitUntilAsync(() => store.TryGet(coreUri, out _), "open test document");
+        Drain(queue);
+
+        // The first real feature handler must remain in the backend while
+        // StreamJsonRpc admits the second request. No FIFO dispatch matching.
+        var wireUri = JsonSerializer.Serialize(uri.AbsoluteUri);
+        backend.ArmNavigation();
+        var events = new List<StampedEvent>();
+        try
+        {
+            session.Client.SendRawJson(
+                $"""{"jsonrpc":"2.0","id":731,"method":"textDocument/definition","params":{"textDocument":{"uri":{{wireUri}}},"position":{"line":0,"character":4}}}""");
+            Assert.True(backend.WaitUntilNavigationEntered(TimeSpan.FromSeconds(10)),
+                "definition must enter the blocked backend");
+
+            session.Client.SendRawJson(
+                $"""{"jsonrpc":"2.0","id":"731","method":"textDocument/hover","params":{"textDocument":{"uri":{{wireUri}}},"position":{"line":0,"character":4}}}""");
+
+            await session.Client.WaitUntilAsync(() =>
+            {
+                queue.DrainAll(events);
+                return events.Any(e => e.Event.Event == "request.started" && e.Event.Stage == "definition")
+                    && events.Any(e => e.Event.Event == "feature.request.started" && e.Event.Stage == "hover");
+            }, "both handlers must start before the backend is released");
+        }
+        finally
+        {
+            backend.ReleaseNavigation();
+        }
+
+        await WaitForFrameAsync(session.Server,
+            e => e.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.Number
+                && id.GetInt32() == 731, "numeric definition response");
+        await WaitForFrameAsync(session.Server,
+            e => e.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String
+                && id.GetString() == "731", "string hover response");
+
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return events.Count(e => e.Event.Event == "rpc.response.sent") == 2
+                && events.Any(e => e.Event.Event == "request.completed" && e.Event.Stage == "definition")
+                && events.Any(e => e.Event.Event == "feature.request.completed" && e.Event.Stage == "hover");
+        }, "paired concurrent feature responses");
+
+        var definitionRpc = Assert.Single(events, e => e.Event.Event == "rpc.request.received"
+            && Attribute(e, "method") == "textDocument/definition");
+        var hoverRpc = Assert.Single(events, e => e.Event.Event == "rpc.request.received"
+            && Attribute(e, "method") == "textDocument/hover");
+        Assert.Equal("number", definitionRpc.Event.RpcRequestId!.Value.Type);
+        Assert.Equal("string", hoverRpc.Event.RpcRequestId!.Value.Type);
+        Assert.Equal("731", definitionRpc.Event.RpcRequestId!.Value.Value);
+        Assert.Equal("731", hoverRpc.Event.RpcRequestId!.Value.Value);
+        Assert.NotEqual(definitionRpc.Event.RequestUid, hoverRpc.Event.RequestUid);
+
+        var definitionStart = Assert.Single(events, e =>
+            e.Event.Event == "request.started" && e.Event.Stage == "definition");
+        var hoverStart = Assert.Single(events, e =>
+            e.Event.Event == "feature.request.started" && e.Event.Stage == "hover");
+        Assert.Equal(definitionRpc.Event.RequestUid, definitionStart.Event.RequestUid);
+        Assert.Equal(hoverRpc.Event.RequestUid, hoverStart.Event.RequestUid);
+
+        foreach (var received in new[] { definitionRpc, hoverRpc })
+        {
+            var response = Assert.Single(events, e =>
+                e.Event.Event == "rpc.response.sent" && e.Event.RequestUid == received.Event.RequestUid);
+            Assert.Equal(received.Event.RpcRequestId, response.Event.RpcRequestId);
+            Assert.Equal("success", response.Event.Outcome);
+        }
+
         Assert.Equal(0, observer.Catalog!.UnknownEvents);
         Assert.Equal(0, observer.Catalog.MissingFields);
     }
