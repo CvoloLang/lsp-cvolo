@@ -257,6 +257,64 @@ public class DefinitionObservabilityTests : IDisposable
         AssertCatalogClean();
     }
 
+
+    [Fact]
+    public async Task UncapturedDefinitionTarget_RecordsMissingSourceAtMappingAndTerminal()
+    {
+        await StartAsync();
+        await OpenAsync("a.cvl");
+        _backend.CannedSymbol = Symbol();
+        var targetUri = DocumentUri.Create(_workspace.PathOf("b.cvl"));
+        // The backend knows the target location but did not capture source
+        // text. The LSP must not call this an unresolved symbol or invalid span.
+        _backend.CannedDefinitions = new BackendDefinitionResult(
+            new Dictionary<DocumentUri, string>(),
+            [new BackendDefinitionTarget(targetUri, new TextSpan(0, 3), new TextSpan(0, 3))]);
+
+        Assert.Null(await _session.Client.DefinitionAsync(Uri("a.cvl"), 0, 4)
+            .WithTimeout("missing target source"));
+
+        var events = Drain();
+        Assert.Equal("found", Assert.Single(Named(events, "symbol.lookup.completed")).Event.Outcome);
+        Assert.Equal("found", Assert.Single(Named(events, "definition.targets.completed")).Event.Outcome);
+        var rejected = Assert.Single(Named(events, "definition.mapping.rejected"));
+        Assert.Equal("target_not_captured", rejected.Event.Reason);
+        Assert.Equal("rejected", Assert.Single(Named(events, "definition.mapping.completed")).Event.Outcome);
+        var terminal = Assert.Single(Named(events, "request.completed"));
+        Assert.Equal("not_found", terminal.Event.Outcome);
+        Assert.Equal("target_not_captured", terminal.Event.Reason);
+        AssertCatalogClean();
+    }
+
+    [Fact]
+    public async Task AllInvalidDefinitionSpans_KeepInvalidSpanTerminalReason()
+    {
+        await StartAsync();
+        await OpenAsync("a.cvl");
+        _backend.CannedSymbol = Symbol();
+        var targetUri = DocumentUri.Create(_workspace.PathOf("a.cvl"));
+        // A captured source with a malformed selection span is not missing.
+        // Returning null remains the existing behavior; only the observable
+        // terminal reason is corrected.
+        _backend.CannedDefinitions = new BackendDefinitionResult(
+            new Dictionary<DocumentUri, string> { [targetUri] = Text },
+            [new BackendDefinitionTarget(targetUri, new TextSpan(0, 3), new TextSpan(0, 5000))]);
+
+        Assert.Null(await _session.Client.DefinitionAsync(Uri("a.cvl"), 0, 4)
+            .WithTimeout("invalid target span"));
+
+        var events = Drain();
+        Assert.Equal("found", Assert.Single(Named(events, "symbol.lookup.completed")).Event.Outcome);
+        Assert.Equal("found", Assert.Single(Named(events, "definition.targets.completed")).Event.Outcome);
+        var rejected = Assert.Single(Named(events, "definition.mapping.rejected"));
+        Assert.Equal("invalid_target_span", rejected.Event.Reason);
+        Assert.Equal("rejected", Assert.Single(Named(events, "definition.mapping.completed")).Event.Outcome);
+        var terminal = Assert.Single(Named(events, "request.completed"));
+        Assert.Equal("not_found", terminal.Event.Outcome);
+        Assert.Equal("invalid_target_span", terminal.Event.Reason);
+        AssertCatalogClean();
+    }
+
     [Fact]
     public async Task BackendFailure_IsRecordedAsFaulted()
     {

@@ -155,10 +155,10 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
             return null;
         }
 
-        Location[]? locations = Map(result, request.OperationId, context.Version.Value);
+        Location[]? locations = Map(result, request.OperationId, context.Version.Value, out string? emptyReason);
         if (locations is null)
         {
-            CompleteRequest(request, "not_found", "target_not_captured");
+            CompleteRequest(request, "not_found", emptyReason ?? "target_not_captured");
             return null;
         }
 
@@ -167,7 +167,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
         return locations;
     }
 
-    private Location[]? Map(BackendDefinitionResult result, string operationId, long version)
+    private Location[]? Map(BackendDefinitionResult result, string operationId, long version, out string? emptyReason)
     {
         IOperationScope mapping = EmitStageOperation(MappingStartedEvent, operationId, version);
 
@@ -175,6 +175,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
         var seen = new HashSet<(string Path, int Start, int Length)>();
         var locations = new List<Location>(result.Targets.Count);
         bool rejected = false;
+        emptyReason = null;
 
         foreach (BackendDefinitionTarget target in result.Targets)
         {
@@ -182,6 +183,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
             {
                 logger.Debug($"[definition] skipping target in '{target.Document}' without captured text.");
                 EmitStage(MappingRejectedEvent, "rejected", "target_not_captured", operationId, version);
+                emptyReason ??= "target_not_captured";
                 rejected = true;
                 continue;
             }
@@ -191,6 +193,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
             {
                 logger.Debug($"[definition] skipping target in '{target.Document}' with an out-of-range selection span.");
                 EmitStage(MappingRejectedEvent, "rejected", "invalid_target_span", operationId, version);
+                emptyReason ??= "invalid_target_span";
                 rejected = true;
                 continue;
             }
@@ -205,6 +208,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
             {
                 logger.Debug($"[definition] skipping target in '{target.Document}' whose selection span cannot be mapped.");
                 EmitStage(MappingRejectedEvent, "rejected", "invalid_target_span", operationId, version);
+                emptyReason ??= "invalid_target_span";
                 rejected = true;
                 continue;
             }
@@ -212,6 +216,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
             if (!seen.Add((target.Document.LocalPath, span.Start, span.Length)))
             {
                 EmitStage(MappingRejectedEvent, "rejected", "target_deduplicated", operationId, version);
+                emptyReason ??= "target_deduplicated";
                 rejected = true;
                 continue;
             }
