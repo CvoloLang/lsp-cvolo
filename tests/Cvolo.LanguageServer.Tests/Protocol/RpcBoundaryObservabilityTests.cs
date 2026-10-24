@@ -417,18 +417,26 @@ public sealed class RpcBoundaryObservabilityTests
 
         // The first real feature handler must remain in the backend while
         // StreamJsonRpc admits the second request. No FIFO dispatch matching.
-        var wireUri = JsonSerializer.Serialize(uri.AbsoluteUri);
+        var parameters = new
+        {
+            textDocument = new { uri = uri.AbsoluteUri },
+            position = new { line = 0, character = 4 },
+        };
         backend.ArmNavigation();
         var events = new List<StampedEvent>();
         try
         {
-            session.Client.SendRawJson(
-                $$"""{"jsonrpc":"2.0","id":731,"method":"textDocument/definition","params":{"textDocument":{"uri":{{wireUri}}},"position":{"line":0,"character":4}}}""");
+            session.Client.SendRawJson(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 731, method = "textDocument/definition", @params = parameters,
+            }));
             Assert.True(backend.WaitUntilNavigationEntered(TimeSpan.FromSeconds(10)),
                 "definition must enter the blocked backend");
 
-            session.Client.SendRawJson(
-                $$"""{"jsonrpc":"2.0","id":"731","method":"textDocument/hover","params":{"textDocument":{"uri":{{wireUri}}},"position":{"line":0,"character":4}}}""");
+            session.Client.SendRawJson(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = "731", method = "textDocument/hover", @params = parameters,
+            }));
 
             await session.Client.WaitUntilAsync(() =>
             {
