@@ -102,11 +102,23 @@ public class EditorIntelligenceConfigurationTests : IDisposable
             .NotifyDidChangeConfigurationAsync(new JObject { ["cvolo.codeLens.references"] = false })
             .WithTimeout("didChangeConfiguration");
 
-        // The settings still take effect; only the courtesy request is skipped.
-        await _session.Client.CodeLensAsync(Uri).WithTimeout("codeLens after configuration");
+        // Notifications are fire-and-forget and StreamJsonRpc may schedule
+        // the following CodeLens request before didChangeConfiguration has
+        // executed. A single RPC is not an acknowledged configuration barrier.
+        // Retry a bounded *observable* CodeLens request until the effective
+        // settings reach the backend; do not weaken the negative refresh checks.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            await _session.Client.CodeLensAsync(Uri).WithTimeout("codeLens after configuration");
+            if (_backend.LastCodeLensOptions?.References == false)
+                break;
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
         await _session.Client.DrainNotificationsAsync();
 
-        Assert.False(_backend.LastCodeLensOptions!.References);
+        Assert.NotNull(_backend.LastCodeLensOptions);
+        Assert.False(_backend.LastCodeLensOptions.References);
         Assert.False(SawRefreshRequest("workspace/codeLens/refresh"));
         Assert.False(SawRefreshRequest("workspace/inlayHint/refresh"));
     }
