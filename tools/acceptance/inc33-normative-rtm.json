@@ -821,7 +821,8 @@
       "coveredMethods": [],
       "eventIds": [],
       "testIds": [
-        "LSP33-RPC-05"
+        "LSP33-RPC-05",
+        "LSP33-RPC-08"
       ],
       "testType": "partial_xunit_or_python",
       "oracle": "Нет перепутывания request IDs и trace context; не используются unsafe globals",
@@ -830,7 +831,7 @@
       "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Current numeric/string pairing is covered, but the complete test oracle must include parallel request trace context and broader routing evidence."
+      "knownLimitations": "CI #40104826117 on f5588a3 confirms Windows/Ubuntu numeric/string same-digit IDs for concurrently admitted definition and hover, including a blocked navigation backend and independent handler/response requestUid. Full transport-to-dispatch proof across every route, stress and release artifact evidence are still pending."
     },
     {
       "requirementId": "OBS-LSP-009",

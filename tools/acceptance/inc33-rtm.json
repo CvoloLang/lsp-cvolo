@@ -401,6 +401,24 @@
       }
     },
     {
+      "id": "LSP33-RPC-08",
+      "title": "Concurrent real feature handlers preserve numeric/string request UID while backend is blocked",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RpcBoundaryObservabilityTests.cs",
+        "method": "Numeric_and_string_ids_preserve_real_feature_context_during_overlapping_backend_calls"
+      }
+    },
+    {
+      "id": "LSP33-RPC-09",
+      "title": "Unknown incoming RPC methods do not leak attacker-controlled names into metadata trace",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/RpcBoundaryObservabilityTests.cs",
+        "method": "Unknown_request_and_notification_methods_cannot_leak_untrusted_text_into_trace"
+      }
+    },
+    {
       "id": "LSP33-LSP-01",
       "title": "Real LSP process switches recording modes, retains server identity and epoch without restart",
       "state": "implemented_test",
