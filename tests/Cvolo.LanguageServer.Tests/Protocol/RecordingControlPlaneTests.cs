@@ -70,7 +70,7 @@ public sealed class RecordingControlPlaneTests
         queue.DrainAll(afterStart);
         var inbound = Assert.Single(afterStart, x =>
             x.Event.Event == "rpc.request.received"
-            && x.Event.Attributes?.Any(a => a.Key == "method" && a.Value == "cvolo/unknownRequest") == true);
+            && x.Event.Attributes?.Any(a => a.Key == "method" && a.Value == "unrecognized_method") == true);
         var outbound = Assert.Single(afterStart, x => x.Event.Event == "rpc.response.sent");
         Assert.NotNull(inbound.Event.RequestUid);
         Assert.Equal(inbound.Event.RequestUid, outbound.Event.RequestUid);
@@ -103,7 +103,7 @@ public sealed class RecordingControlPlaneTests
         queue.DrainAll(events);
         Assert.DoesNotContain(events, x => x.Event.Event == "rpc.request.received"
             && x.Event.Attributes?.Any(a =>
-                a.Key == "method" && a.Value == "cvolo/unknownRequest") == true);
+                a.Key == "method" && a.Value == "unrecognized_method") == true);
     }
 
     [Fact]

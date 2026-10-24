@@ -76,7 +76,7 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 			Outcome = "received",
 			RequestUid = requestUid,
 			RpcRequestId = ToRpcRequestId(request.RequestId),
-			Attributes = [new KeyValuePair<string, string>("method", request.Method)],
+			Attributes = [new KeyValuePair<string, string>("method", SafeMethodName(request.Method))],
 		});
 	}
 
@@ -93,7 +93,7 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 			Detail = DiagnosticDetail.L0,
 			Priority = EventPriority.P1,
 			Outcome = "received",
-			Attributes = [new KeyValuePair<string, string>("method", method)],
+			Attributes = [new KeyValuePair<string, string>("method", SafeMethodName(method))],
 		});
 	}
 
@@ -174,6 +174,59 @@ internal sealed class RpcObservability : IDisposable, IActivityTracingStrategy
 
 	private void OnResponseSent(object? sender, JsonRpcResponseEventArgs args)
 		=> OnResponseSent(args.RequestId, args.IsSuccessfulResponse);
+
+
+	/// <summary>
+	/// JSON-RPC method names are controlled by the remote peer. Unknown names may
+	/// contain source text, paths or secrets; never put them in metadata-only traces.
+	/// Keep only names of protocol surfaces explicitly supported by this server.
+	/// A prefix/character whitelist is insufficient: a syntactically valid method
+	/// name may itself contain private user data.
+	/// </summary>
+	private static string SafeMethodName(string method) => method switch
+	{
+		"initialize" or "initialized" or "shutdown" or "exit"
+		or "$/cancelRequest" or "$/setTrace"
+		or "textDocument/didOpen" or "textDocument/didChange"
+		or "textDocument/didClose" or "textDocument/didSave"
+		or "textDocument/completion" or "completionItem/resolve"
+		or "textDocument/signatureHelp" or "textDocument/hover"
+		or "textDocument/definition" or "textDocument/typeDefinition"
+		or "textDocument/implementation" or "textDocument/prepareTypeHierarchy"
+		or "typeHierarchy/supertypes" or "typeHierarchy/subtypes"
+		or "textDocument/documentSymbol" or "textDocument/semanticTokens/full"
+		or "textDocument/references" or "textDocument/rename"
+		or "textDocument/prepareRename" or "textDocument/codeAction"
+		or "codeAction/resolve" or "textDocument/codeLens" or "codeLens/resolve"
+		or "textDocument/inlayHint" or "inlayHint/resolve"
+		or "textDocument/documentHighlight" or "textDocument/foldingRange"
+		or "textDocument/selectionRange" or "workspace/executeCommand"
+		or "workspace/didChangeConfiguration" or "workspace/didChangeWatchedFiles"
+		or "cvolo/typeLayout" or "cvolo/validateAnchoredAction.v3"
+		or RecordingControlPlane.SetMethod
+		or RecordingControlPlane.StatusMethod
+		or RecordingControlPlane.CheckpointMethod
+		or RecordingControlPlane.ExportMethod
+		or RecordingControlPlane.MarkerMethod
+		or RecordingControlPlane.GrantConsentMethod
+		or RecordingControlPlane.RevokeConsentMethod
+		or RecordingControlPlane.ConsentStatusMethod
+		or RecordingControlPlane.ArmJournalMethod
+		or RecordingControlPlane.SealJournalMethod
+		or RecordingControlPlane.ExportSourceMethod
+		or RecordingControlPlane.VerifyJournalMethod
+		or RecordingControlPlane.VerifyCheckpointMethod
+		or RecordingControlPlane.FlightSnapshotMethod
+		or RecordingControlPlane.FlightTriggerMethod
+		or RecordingControlPlane.FlightIncidentIndexMethod
+		or RecordingControlPlane.FlightCheckpointStatusMethod
+		or RecordingControlPlane.FlightCheckpointRecoveryMethod
+		or RecordingControlPlane.FlightPerformanceMethod
+		or RecordingControlPlane.FlightResourceMethod
+		or RecordingControlPlane.FlightCausalMethod
+		or RecordingControlPlane.DocumentTransportAuditMethod => method,
+		_ => "unrecognized_method",
+	};
 
 	// Use a typed value key: no temporary formatted strings on every
 	// receive/dispatch/response lookup. The tag ensures JSON-RPC numeric

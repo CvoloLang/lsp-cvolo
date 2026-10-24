@@ -348,6 +348,54 @@ public sealed class RpcBoundaryObservabilityTests
         Assert.Equal(0, observer.Catalog!.MissingFields);
     }
 
+
+    [Fact]
+    public async Task Unknown_request_and_notification_methods_cannot_leak_untrusted_text_into_trace()
+    {
+        var (observer, queue) = CreateObserver();
+        using var session = ProtocolSession.Start(observer: observer);
+        await session.Client.InitializeAsync().ConfigureAwait(false);
+        Drain(queue);
+
+        const string secret = "PRIVATE_SOURCE_TOKEN_NEVER_LOG_THIS";
+        // The wire must still answer the original method, even though the
+        // metadata-only trace is forbidden from storing its untrusted name.
+        session.Client.SendRawJson(
+            $$"""{"jsonrpc":"2.0","id":9804,"method":"textDocument/{{secret}}","params":null}""");
+        await WaitForFrameAsync(
+            session.Server,
+            element => element.TryGetProperty("id", out var id)
+                && id.ValueKind == JsonValueKind.Number && id.GetInt32() == 9804,
+            "unknown-method error response").ConfigureAwait(false);
+
+        session.Client.SendRawJson(
+            $$"""{"jsonrpc":"2.0","method":"window/{{secret}}","params":null}""");
+
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return events.Any(e => e.Event.Event == "rpc.response.sent"
+                    && e.Event.RequestUid is not null)
+                && events.Any(e => e.Event.Event == "rpc.notification.received"
+                    && Attribute(e, "method") == "unrecognized_method");
+        }, "private request and notification boundary events");
+
+        var request = Assert.Single(events, e =>
+            e.Event.Event == "rpc.request.received" && Attribute(e, "method") == "unrecognized_method");
+        var response = Assert.Single(events, e =>
+            e.Event.Event == "rpc.response.sent" && e.Event.RequestUid == request.Event.RequestUid);
+        Assert.Equal(request.Event.RpcRequestId, response.Event.RpcRequestId);
+        Assert.Equal("error", response.Event.Outcome);
+
+        // Both incoming method names were attacker-owned; neither may
+        // appear in any structured telemetry attribute.
+        Assert.DoesNotContain(events, e => e.Event.Attributes?.Any(a =>
+            a.Value.Contains(secret, StringComparison.Ordinal)) == true);
+        Assert.Equal(0, observer.Catalog!.UnknownEvents);
+        Assert.Equal(0, observer.Catalog.MissingFields);
+    }
+
     [Fact]
     public async Task Instrumentation_adds_no_bytes_to_the_protocol_stream()
     {
