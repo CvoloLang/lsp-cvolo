@@ -75,9 +75,16 @@ public sealed class LifecycleObservabilityTests : IDisposable
         Drain(queue); // boundary rpc events from initialize are not under test here
 
         await session.Client.NotifyInitializedAsync().WithTimeout("initialized");
-        await session.Client.WaitUntilAsync(() => session.Server.InitializedReceived, "the initialized notification");
-
-        List<StampedEvent> events = Drain(queue);
+        // SessionState.InitializedReceived becomes true before the trace
+        // callback publishes client.initialized. Waiting on the state flag
+        // alone races the trace assertion, especially on loaded CI workers.
+        var events = new List<StampedEvent>();
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return session.Server.InitializedReceived
+                && Named(events, "client.initialized").Any();
+        }, "initialized state and observed client.initialized terminal");
         StampedEvent initialized = Assert.Single(Named(events, "client.initialized"));
         Assert.Equal("initialized", initialized.Event.Outcome);
         Assert.Equal(0, observer.Catalog!.UnknownEvents);
