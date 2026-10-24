@@ -55,6 +55,14 @@
       <HintPath>$(CvoloToolingDir)/Cvolo.Compiler.Tooling.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <Reference Include="Cvolo.Packaging">
+      <HintPath>$(CvoloToolingDir)/Cvolo.Packaging.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Cvolo.Core.Packages">
+      <HintPath>$(CvoloToolingDir)/Cvolo.Core.Packages.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup Condition="'$(CvoloManagedToolingAvailable)' != 'true'">
