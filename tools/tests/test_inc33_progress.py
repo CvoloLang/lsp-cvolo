@@ -21,7 +21,12 @@ class StableProgressTests(unittest.TestCase):
         self.assertEqual(87, output.count("- [ ] " + chr(96) + "OBS-"))
         for family, _, _ in FAMILIES:
             self.assertEqual(1, output.count("### " + family + " — "))
-        self.assertIn("0/87 PASS; 20 PARTIAL; 67 BLOCKED; 0 FAIL", output)
+        counts = {status: sum(r["status"] == status for r in self.matrix["requirements"])
+                  for status in ("PASS", "PARTIAL", "BLOCKED", "FAIL")}
+        self.assertIn(
+            f'{counts["PASS"]}/87 PASS; {counts["PARTIAL"]} PARTIAL; '
+            f'{counts["BLOCKED"]} BLOCKED; {counts["FAIL"]} FAIL',
+            output)
 
     def test_progress_matches_normative_source_of_truth(self):
         self.assertEqual(0, main())
@@ -33,7 +38,10 @@ class StableProgressTests(unittest.TestCase):
         changed["requirements"][0]["status"] = "PARTIAL"
         revised = render_progress(changed)
         self.assertNotEqual(revised, TARGET.read_text(encoding="utf-8"))
-        self.assertIn("21 PARTIAL; 66 BLOCKED", revised)
+        baseline_partial = sum(r["status"] == "PARTIAL" for r in self.matrix["requirements"])
+        baseline_blocked = sum(r["status"] == "BLOCKED" for r in self.matrix["requirements"])
+        self.assertIn(f"{baseline_partial + 1} PARTIAL; {baseline_blocked - 1} BLOCKED",
+                      revised)
         self.assertNotIn("- [x] ", revised)
 
     def test_missing_id_or_extra_stage_is_rejected(self):
