@@ -216,6 +216,77 @@ public class DocumentSyncObservabilityTests : IDisposable
     }
 
     [Fact]
+    public async Task Close_then_reopen_preserves_terminal_outcomes_without_reusing_old_version()
+    {
+        var (observer, queue) = CreateObserver(ObservabilityMode.Detailed);
+        using var session = ProtocolSession.Start(_logger, observer: observer);
+        var store = await StartAsync(session);
+        var uri = _workspace.DocumentUri("main.cvl");
+        var key = DocumentUri.Create(_workspace.PathOf("main.cvl"));
+        var events = new List<StampedEvent>();
+
+        await session.Client.NotifyDidOpenAsync(uri, "cvolo", 1,
+            "int main() { return 0; }").WithTimeout("didOpen");
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.did_open").Any(e =>
+                e.Event.Outcome == "applied" && e.Event.DocumentVersion == 1);
+        }, "initial open observed");
+
+        await session.Client.NotifyDidChangeAsync(uri, 2,
+            new TextDocumentContentChangeEvent
+            {
+                Text = "int main() { return 1; }"
+            }).WithTimeout("didChange");
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.did_change.applied").Any(e =>
+                e.Event.DocumentVersion == 2);
+        }, "change observed");
+
+        await session.Client.NotifyDidCloseAsync(uri).WithTimeout("didClose");
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.did_close").Any(e =>
+                e.Event.Outcome == "applied");
+        }, "close observed");
+        Assert.False(store.TryGet(key, out _));
+
+        // A new open represents a new document session, even when the client
+        // restarts document version numbering. The old v2 is not current.
+        await session.Client.NotifyDidOpenAsync(uri, "cvolo", 1,
+            "int main() { return 9; }").WithTimeout("reopen");
+        await session.Client.WaitUntilAsync(() =>
+        {
+            queue.DrainAll(events);
+            return Named(events, "document.did_open").Count(e =>
+                e.Event.Outcome == "applied" && e.Event.DocumentVersion == 1) == 2;
+        }, "reopen observed");
+
+        Assert.True(store.TryGet(key, out var reopened));
+        Assert.Equal(1, reopened!.Version.Value);
+        Assert.Equal("int main() { return 9; }", reopened.Text);
+
+        var opens = Named(events, "document.did_open").Where(e =>
+            e.Event.Outcome == "applied").ToArray();
+        Assert.Equal(2, opens.Length);
+        Assert.Single(Named(events, "document.did_change.applied").Where(e =>
+            e.Event.DocumentVersion == 2));
+        var closed = Assert.Single(Named(events, "document.did_close"));
+        Assert.Equal("applied", closed.Event.Outcome);
+        Assert.Null(closed.Event.Reason);
+        Assert.Null(closed.Event.DocumentVersion);
+        Assert.Empty(Named(events, "document.did_change.rejected"));
+        Assert.Equal(0, observer.Catalog!.UnknownEvents);
+        Assert.Equal(0, observer.Catalog!.UnknownOutcomes);
+        Assert.Equal(0, observer.Catalog!.UnknownReasons);
+        Assert.Equal(0, observer.Catalog!.MissingFields);
+    }
+
+    [Fact]
     public async Task Disabled_observability_records_nothing_while_sync_still_works()
     {
         var (observer, queue) = CreateObserver(ObservabilityMode.Off);
