@@ -13,6 +13,176 @@ public sealed class IsolatedProcessLifecycleCollection;
 [Collection("IsolatedProcessLifecycle")]
 public class ProcessLifecycleTests
 {
+
+    [Fact]
+    public async Task RealProcess_RecordingTransitionsRetainPidIdentityAndEpoch()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "cvolo-lsp-mode-e2e-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string trace = Path.Combine(directory, "trace.jsonl");
+        try
+        {
+            using var server = ServerProcess.StartWithEnvironment(
+                new Dictionary<string, string?>
+                {
+                    ["CVOLO_OBS_MODE"] = "off",
+                    ["CVOLO_TRACE_PATH"] = trace,
+                }, "--stdio");
+            int pid = server.Id;
+            await InitializeProcessAsync(server);
+            JObject initial = await RequestRecordingStatusAsync(server, 10);
+            Assert.True((bool)initial["supported"]!);
+            Assert.Equal("off", (string?)initial["effectiveMode"]);
+            Assert.Equal(0, (long)initial["recordingEpoch"]!);
+            string instance = (string)initial["serverInstanceId"]!;
+            Assert.False(string.IsNullOrWhiteSpace(instance));
+            Assert.False(File.Exists(trace));
+
+            // Before activation, requests must not silently create a log or
+            // acquire a retroactive trace when the observer starts later.
+            server.SendJson(JsonRpcFrames.Request(11, "cvolo/unknownRequest", "null"));
+            JObject before = await server.WaitForResponseAsync(11, TimeSpan.FromSeconds(20));
+            Assert.NotNull(before["error"]);
+            Assert.False(File.Exists(trace));
+
+            var sequence = new[] { "basic", "detailed", "off", "basic", "off" };
+            long epoch = 0;
+            int requestId = 20;
+            foreach (string mode in sequence)
+            {
+                JObject ack = await RequestRecordingModeAsync(server, requestId++, mode);
+                Assert.Equal("applied", (string?)ack["status"]);
+                Assert.Equal(mode, (string?)ack["effectiveMode"]);
+                Assert.Equal(++epoch, (long)ack["recordingEpoch"]!);
+                Assert.Equal(instance, (string?)ack["serverInstanceId"]);
+                Assert.NotNull(ack["appliedAtUtc"]);
+                Assert.False((bool)ack["captureSources"]!);
+                Assert.False((bool)ack["capturePaths"]!);
+                Assert.False((bool)ack["forensicScope"]!);
+                Assert.False(server.HasExited);
+                Assert.Equal(pid, server.Id);
+                JObject status = await RequestRecordingStatusAsync(server, requestId++);
+                Assert.Equal(mode, (string?)status["effectiveMode"]);
+                Assert.Equal(epoch, (long)status["recordingEpoch"]!);
+                Assert.Equal(instance, (string?)status["serverInstanceId"]);
+                if (mode != "off")
+                {
+                    Assert.True((bool)ack["diskRecordingActive"]!);
+                    Assert.True(File.Exists(trace));
+                }
+                else
+                {
+                    Assert.False((bool)ack["diskRecordingActive"]!);
+                }
+            }
+
+            server.SendJson(JsonRpcFrames.Request(90, "shutdown", "null"));
+            JObject shutdown = await server.WaitForResponseAsync(90, TimeSpan.FromSeconds(20));
+            Assert.Equal(JTokenType.Null, shutdown["result"]!.Type);
+            server.SendJson(JsonRpcFrames.Notification("exit", "null"));
+            Assert.Equal(0, await server.WaitForExitAsync(TimeSpan.FromSeconds(20)));
+
+            string[] lines = await File.ReadAllLinesAsync(trace);
+            Assert.NotEmpty(lines);
+            foreach (string line in lines)
+                Assert.Equal(JTokenType.Object, JObject.Parse(line).Type);
+            // Verify no private source content was needed to toggle modes.
+            Assert.DoesNotContain("cvolo-lsp-mode-e2e-", string.Join("\n", lines));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RealProcess_RestartGivesFreshServerIdentityAndOffEpoch()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "cvolo-lsp-restart-e2e-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string? firstId;
+            var env = new Dictionary<string, string?>
+            {
+                ["CVOLO_OBS_MODE"] = "off",
+                ["CVOLO_TRACE_PATH"] = Path.Combine(directory, "trace1.jsonl"),
+            };
+            using (var first = ServerProcess.StartWithEnvironment(env, "--stdio"))
+            {
+                await InitializeProcessAsync(first);
+                JObject initial = await RequestRecordingStatusAsync(first, 40);
+                firstId = (string?)initial["serverInstanceId"];
+                Assert.False(string.IsNullOrWhiteSpace(firstId));
+                JObject started = await RequestRecordingModeAsync(first, 41, "basic");
+                Assert.Equal("applied", (string?)started["status"]);
+                Assert.Equal(1, (long)started["recordingEpoch"]!);
+                first.SendJson(JsonRpcFrames.Request(42, "shutdown", "null"));
+                await first.WaitForResponseAsync(42, TimeSpan.FromSeconds(20));
+                first.SendJson(JsonRpcFrames.Notification("exit", "null"));
+                Assert.Equal(0, await first.WaitForExitAsync(TimeSpan.FromSeconds(20)));
+            }
+
+            env["CVOLO_TRACE_PATH"] = Path.Combine(directory, "trace2.jsonl");
+            using (var second = ServerProcess.StartWithEnvironment(env, "--stdio"))
+            {
+                await InitializeProcessAsync(second);
+                JObject status = await RequestRecordingStatusAsync(second, 40);
+                Assert.NotEqual(firstId, (string?)status["serverInstanceId"]);
+                Assert.Equal("off", (string?)status["effectiveMode"]);
+                Assert.Equal(0, (long)status["recordingEpoch"]!);
+                Assert.False(File.Exists(env["CVOLO_TRACE_PATH"]!));
+                second.SendJson(JsonRpcFrames.Request(42, "shutdown", "null"));
+                await second.WaitForResponseAsync(42, TimeSpan.FromSeconds(20));
+                second.SendJson(JsonRpcFrames.Notification("exit", "null"));
+                Assert.Equal(0, await second.WaitForExitAsync(TimeSpan.FromSeconds(20)));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static async Task InitializeProcessAsync(ServerProcess server)
+    {
+        server.SendJson(JsonRpcFrames.Request(1, "initialize",
+            "{\"processId\":null,\"rootPath\":null}"));
+        JObject init = await server.WaitForResponseAsync(1, TimeSpan.FromSeconds(20));
+        Assert.NotNull(init["result"]?["capabilities"]);
+        server.SendJson(JsonRpcFrames.Notification("initialized", "{}"));
+    }
+
+    private static async Task<JObject> RequestRecordingStatusAsync(ServerProcess server, int id)
+    {
+        server.SendJson(JsonRpcFrames.Request(id,
+            "cvolo/observability/status.v1", "null"));
+        JObject reply = await server.WaitForResponseAsync(id, TimeSpan.FromSeconds(20));
+        Assert.Null(reply["error"]);
+        return (JObject)reply["result"]!;
+    }
+
+    private static async Task<JObject> RequestRecordingModeAsync(
+        ServerProcess server, int id, string mode)
+    {
+        var parameters = new JObject
+        {
+            ["protocolVersion"] = 1, ["mode"] = mode,
+            ["captureSources"] = false, ["capturePaths"] = false,
+            ["forensicScope"] = false,
+        };
+        server.SendJson(JsonRpcFrames.Request(id,
+            "cvolo/observability/setRecording.v1",
+            parameters.ToString(Newtonsoft.Json.Formatting.None)));
+        JObject reply = await server.WaitForResponseAsync(id, TimeSpan.FromSeconds(20));
+        Assert.Null(reply["error"]);
+        return (JObject)reply["result"]!;
+    }
+
     [Fact]
     public async Task ExitBeforeInitialize_ExitsNonZero_WithNoStdoutFrames()
     {

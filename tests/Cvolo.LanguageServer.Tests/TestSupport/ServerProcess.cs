@@ -29,6 +29,15 @@ internal sealed class ServerProcess : IDisposable
     }
 
     public static ServerProcess Start(params string[] args)
+        => StartWithEnvironment(null, args);
+
+    /// <summary>
+    /// Per-child environment overrides: never mutate the test runner's
+    /// process-wide environment (other test collections run concurrently).
+    /// A null value removes the variable from this child only.
+    /// </summary>
+    public static ServerProcess StartWithEnvironment(
+        IReadOnlyDictionary<string, string?>? overrides, params string[] args)
     {
         (var fileName, var leadingArg) = ServerProcessLocator.Locate();
         var psi = new ProcessStartInfo
@@ -41,6 +50,17 @@ internal sealed class ServerProcess : IDisposable
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
+
+        if (overrides is not null)
+        {
+            foreach (var (key, value) in overrides)
+            {
+                if (value is null)
+                    psi.Environment.Remove(key);
+                else
+                    psi.Environment[key] = value;
+            }
+        }
 
         if (leadingArg is not null)
         {
@@ -57,6 +77,7 @@ internal sealed class ServerProcess : IDisposable
     }
 
     public int Id => _process.Id;
+    public bool HasExited => _process.HasExited;
 
     public void SendJson(string json)
     {
