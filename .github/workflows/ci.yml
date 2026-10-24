@@ -82,6 +82,15 @@ jobs:
       - name: Validate normative Inc 3.3 87-case RTM inventory
         run: python tools/validate_inc33_normative_rtm.py
 
+      - name: Verify fixed Inc 3.3 progress plan
+        run: python tools/validate_inc33_progress.py
+
+      # A green development build checks the RTM, not release acceptance.
+      # Tagged releases require verified evidence for every normative case.
+      - name: Require complete Inc 3.3 acceptance for release tags
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python tools/validate_inc33_normative_rtm.py --require-complete
+
       - name: Inc 3.3 performance smoke contract
         shell: bash
         run: |
