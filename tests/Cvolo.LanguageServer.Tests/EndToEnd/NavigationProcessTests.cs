@@ -1,5 +1,6 @@
 using Cvolo.LanguageServer.Tests.TestSupport;
 using Newtonsoft.Json.Linq;
+using Newtonsoft.Json;
 using Xunit;
 
 namespace Cvolo.LanguageServer.Tests.EndToEnd;
@@ -150,6 +151,145 @@ public class NavigationProcessTests
             Assert.Contains("request.completed", trace);
             Assert.Contains("rpc.response.sent", trace);
             Assert.DoesNotContain("int Helper(int value)", trace); // no source capture
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+
+    [Fact]
+    public async Task Definition_RealProcess_NavigatesIntoClosedSdkSource_WithCorrelatedTrace()
+    {
+        // An external bundled SDK source is a distinct navigation target from
+        // the application file. This proves the LSP maps a captured target text
+        // without requiring the target to have been opened in the editor. It is
+        // not a .cvlib package-source acceptance oracle (OBS-LSP-002 remains
+        // incomplete until a real package fixture is exercised).
+        string sourceDirectory = Path.Combine(FindRepoRoot(), "tests", "fixtures", "navigation");
+        string workspace = Path.Combine(Path.GetTempPath(),
+            "cvolo-ls-f12-sdk-" + Guid.NewGuid().ToString("N"));
+        CopyDirectory(sourceDirectory, workspace);
+        string tracePath = Path.Combine(workspace, "sdk-navigation-trace.jsonl");
+        const string source = "using System.Math.Float;\nfloat CosF(float value) { return System.Math.Float.Cos(value); }\n";
+        string mainPath = Path.Combine(workspace, "main.cvl");
+        File.WriteAllText(mainPath, source);
+
+        try
+        {
+            using var server = ServerProcess.StartWithEnvironment(
+                new Dictionary<string, string?>
+                {
+                    ["CVOLO_OBS_MODE"] = "detailed",
+                    ["CVOLO_TRACE_PATH"] = tracePath,
+                }, "--stdio");
+
+            string workspaceUri = new Uri(workspace).AbsoluteUri;
+            server.SendJson(JsonRpcFrames.Request(1, "initialize",
+                JsonConvert.SerializeObject(new
+                {
+                    processId = Environment.ProcessId,
+                    workspaceFolders = new[] { new { uri = workspaceUri, name = "w" } },
+                })));
+            JObject initialized = await server.WaitForResponseAsync(1, TimeSpan.FromSeconds(20));
+            Assert.Null(initialized["error"]);
+            server.SendJson(JsonRpcFrames.Notification("initialized", "{}"));
+
+            string mainUri = new Uri(mainPath).AbsoluteUri;
+            server.SendJson(JsonRpcFrames.Notification("textDocument/didOpen",
+                JsonConvert.SerializeObject(new
+                {
+                    textDocument = new { uri = mainUri, languageId = "cvolo", version = 1, text = source },
+                })));
+
+            int callOffset = source.IndexOf("Cos(value)", StringComparison.Ordinal);
+            Assert.True(callOffset >= 0);
+            (int callLine, int callCharacter) = OffsetToPosition(source, callOffset);
+            server.SendJson(JsonRpcFrames.Request(3, "textDocument/definition",
+                JsonConvert.SerializeObject(new
+                {
+                    textDocument = new { uri = mainUri },
+                    position = new { line = callLine, character = callCharacter },
+                })));
+            JObject definition = await server.WaitForResponseAsync(3, TimeSpan.FromSeconds(30));
+            Assert.Null(definition["error"]);
+            JArray locations = Assert.IsType<JArray>(definition["result"]);
+
+            // Independent oracle: the compiler-pinned System.Math.Float SDK
+            // declares this exact function in Float.cvl.
+            const string declaration = "public float Cos(float x);";
+            const string suffix = "libraries/System/Math/Float.cvl";
+            JToken location = Assert.Single(locations);
+            string targetUriText = Assert.IsType<JValue>(location["uri"]).Value<string>()!;
+            var targetUri = new Uri(targetUriText);
+            Assert.True(targetUri.IsFile);
+            string targetPath = targetUri.LocalPath;
+            Assert.EndsWith(suffix, targetPath.Replace('\\', '/'), StringComparison.Ordinal);
+            Assert.True(File.Exists(targetPath), "Returned SDK target must exist on disk");
+            string targetSource = File.ReadAllText(targetPath);
+            int declarationOffset = targetSource.IndexOf(declaration, StringComparison.Ordinal);
+            Assert.True(declarationOffset >= 0, "Pinned SDK oracle declaration was not found");
+            (int expectedLine, int expectedColumn) =
+                OffsetToPosition(targetSource, declarationOffset + "public float ".Length);
+            Assert.Equal(expectedLine, (int?)location["range"]?["start"]?["line"]);
+            Assert.Equal(expectedColumn, (int?)location["range"]?["start"]?["character"]);
+            Assert.Equal(expectedColumn + 3, (int?)location["range"]?["end"]?["character"]);
+
+            // Drain the actual persistent writer before analyzing JSONL. No
+            // producerSequence or UTC-based guess about writer order is needed.
+            server.SendJson(JsonRpcFrames.Request(4, "cvolo/observability/setRecording.v1",
+                "{\"protocolVersion\":1,\"mode\":\"off\",\"captureSources\":false,\"capturePaths\":false,\"forensicScope\":false}"));
+            JObject stopped = await server.WaitForResponseAsync(4, TimeSpan.FromSeconds(20));
+            Assert.Equal("applied", (string?)stopped["result"]?["status"]);
+            Assert.False((bool?)stopped["result"]?["diskRecordingActive"]);
+
+            server.SendJson(JsonRpcFrames.Request(5, "shutdown", "null"));
+            await server.WaitForResponseAsync(5, TimeSpan.FromSeconds(20));
+            server.SendJson(JsonRpcFrames.Notification("exit", "null"));
+            Assert.Equal(0, await server.WaitForExitAsync(TimeSpan.FromSeconds(20)));
+
+            Assert.True(File.Exists(tracePath));
+            JObject[] events = (await File.ReadAllLinesAsync(tracePath))
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .Select(JObject.Parse)
+                .ToArray();
+            Assert.NotEmpty(events);
+
+            JObject received = Assert.Single(events.Where(e =>
+                (string?)e["event"] == "rpc.request.received"
+                && e["rpcRequestId"]?["type"]?.ToString() == "number"
+                && e["rpcRequestId"]?["value"]?.ToString() == "3"));
+            string requestUid = Assert.IsType<string>((string?)received["requestUid"]);
+            JObject requestStarted = Assert.Single(events.Where(e =>
+                (string?)e["event"] == "request.started"
+                && (string?)e["stage"] == "definition"
+                && (string?)e["requestUid"] == requestUid));
+            string operationId = Assert.IsType<string>((string?)requestStarted["operationId"]);
+
+            foreach (string stageEvent in new[]
+            {
+                "definition.position_mapped",
+                "symbol.lookup.completed",
+                "definition.targets.completed",
+                "definition.mapping.completed",
+                "definition.response.completed",
+            })
+            {
+                Assert.Contains(events, e => (string?)e["event"] == stageEvent
+                    && (string?)e["requestUid"] == requestUid);
+            }
+
+            JObject terminal = Assert.Single(events.Where(e =>
+                (string?)e["event"] == "request.completed"
+                && (string?)e["requestUid"] == requestUid
+                && (string?)e["stage"] == "definition"));
+            Assert.Equal(operationId, (string?)terminal["operationId"]);
+            Assert.Equal("success", (string?)terminal["outcome"]);
+            Assert.Contains(events, e => (string?)e["event"] == "rpc.response.sent"
+                && (string?)e["requestUid"] == requestUid);
+            Assert.DoesNotContain(source, string.Join("\n", events.Select(e => e.ToString())), StringComparison.Ordinal);
         }
         finally
         {
