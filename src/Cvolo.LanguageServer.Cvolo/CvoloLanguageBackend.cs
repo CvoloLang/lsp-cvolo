@@ -70,10 +70,16 @@ internal sealed partial class CvoloLanguageBackend(
         var boundary = SelectBoundary(document.LocalPath);
         ProjectDiscoveryResult discovery = ProjectDiscovery.FindProject(document.LocalPath, boundary);
 
-        if (discovery.Status is ProjectDiscoveryStatus.NoProject or ProjectDiscoveryStatus.LooseWorkspace
-            && TryFindOwningSession(document.LocalPath, out var owner))
+        if (discovery.Status is ProjectDiscoveryStatus.NoProject or ProjectDiscoveryStatus.LooseWorkspace)
         {
-            return owner;
+            // An external F12 target may have no .cvlproj of its own.
+            // Reuse the project/package universe already supplying its source;
+            // rediscovering its extracted directory as a loose workspace would
+            // lose package scope and navigation between package declarations.
+            if (TryFindOwningSession(document.LocalPath, out var owner))
+                return owner;
+            if (TryOpenKnownPackageSource(document.LocalPath, out var packageOwner))
+                return packageOwner;
         }
 
         if (discovery.Status == ProjectDiscoveryStatus.AmbiguousProject)
@@ -115,25 +121,54 @@ internal sealed partial class CvoloLanguageBackend(
         }
     }
 
+    private bool TryOpenKnownPackageSource(string path, out CvoloProjectSession session)
+    {
+        foreach (CvoloProjectSession candidate in _sessions.Values)
+        {
+            if (candidate.IsPackageSource)
+                continue;
+            CvoloProjectSession? package = CreatePackageSession(candidate, path);
+            if (package is not null)
+            {
+                session = package;
+                return true;
+            }
+        }
+
+        session = null!;
+        return false;
+    }
+
     private CvoloProjectSession? CreatePackageSession(CvoloProjectSession owner, string filePath)
     {
-        if (!owner.Project.InitialSnapshot.TryGetPackageSource(filePath, out PackageSourceDocument source))
-        {
+        if (owner.IsPackageSource)
             return null;
+
+        // Keep identity and the list of source files from ONE immutable snapshot.
+        // A source introduced by a later generation must not be looked up in the
+        // stale InitialSnapshot. Do not hold the gate while building the project.
+        ProjectSnapshot captured;
+        PackageSourceDocument source;
+        lock (owner.Gate)
+        {
+            captured = owner.Current;
+            if (!captured.TryGetPackageSource(filePath, out source))
+                return null;
         }
 
         var packageKey = "package:" + owner.Project.ProjectPath + ":" + source.PackageId + ":" + source.Version;
-
         bool existing = _sessions.ContainsKey(packageKey);
-        CvoloProjectSession session = _sessions.GetOrAdd(packageKey, _ => BuildPackageSession(owner, source));
+        CvoloProjectSession session = _sessions.GetOrAdd(
+            packageKey, _ => BuildPackageSession(owner, captured, source));
         EmitAdapter("package_session.opened", existing ? "existing" : "opened");
         return session;
     }
 
-    private CvoloProjectSession BuildPackageSession(CvoloProjectSession owner, PackageSourceDocument source)
+    private CvoloProjectSession BuildPackageSession(
+        CvoloProjectSession owner, ProjectSnapshot captured, PackageSourceDocument source)
     {
         var stopwatch = Stopwatch.StartNew();
-        IReadOnlyList<PackageSourceDocument> sources = owner.Project.InitialSnapshot.GetPackageSources(source.PackageId, source.Version);
+        IReadOnlyList<PackageSourceDocument> sources = captured.GetPackageSources(source.PackageId, source.Version);
         var workspace = CvoloWorkspace.Create(_observer);
         var project = workspace.OpenPackageSource(owner.Project.ProjectPath, sources);
         _logger.Write(
@@ -145,6 +180,7 @@ internal sealed partial class CvoloLanguageBackend(
             Analysis = new GenerationAnalysisRegistry(_metrics),
         };
     }
+
     private bool TryFindOwningSession(string path, out CvoloProjectSession session)
     {
         foreach (var candidate in _sessions.Values)
@@ -893,17 +929,24 @@ internal sealed partial class CvoloLanguageBackend(
             targets.Add(new BackendDefinitionTarget(
                 uri,
                 new CoreTextSpan(definition.Range.Start, definition.Range.Length),
-                new CoreTextSpan(definition.SelectionSpan.Start, definition.SelectionSpan.Length)));
+                new CoreTextSpan(definition.SelectionSpan.Start, definition.SelectionSpan.Length),
+                BackendDefinitionSourceKind.Document));
         }
 
         foreach (PackageSourceDefinition definition in packageDefinitions)
         {
             DocumentUri uri = ToDocumentUri(definition.FilePath);
             texts.TryAdd(uri, definition.Source);
+            // The Tooling package-source table is authoritative: do not infer
+            // package identity from an extracted filesystem path.
+            bool identified = toolingSnapshot.TryGetPackageSource(definition.FilePath, out PackageSourceDocument? provenance);
             targets.Add(new BackendDefinitionTarget(
                 uri,
                 new CoreTextSpan(definition.Range.Start, definition.Range.Length),
-                new CoreTextSpan(definition.SelectionSpan.Start, definition.SelectionSpan.Length)));
+                new CoreTextSpan(definition.SelectionSpan.Start, definition.SelectionSpan.Length),
+                BackendDefinitionSourceKind.PackageSource,
+                identified ? provenance.PackageId : null,
+                identified ? provenance.Version : null));
         }
 
         LogTiming("GetDefinitions", stopwatch, $"symbol='{handle.SymbolId}', sourceTargets={definitions.Count}, packageTargets={packageDefinitions.Count}, targets={targets.Count}, texts={texts.Count}", 50);

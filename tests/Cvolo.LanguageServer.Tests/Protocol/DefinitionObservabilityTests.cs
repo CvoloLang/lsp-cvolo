@@ -158,7 +158,9 @@ public class DefinitionObservabilityTests : IDisposable
         var lookup = Assert.Single(Named(events, "symbol.lookup.started"));
         Assert.Equal("found", Assert.Single(Named(events, "symbol.lookup.completed")).Event.Outcome);
         Assert.Equal("found", Assert.Single(Named(events, "definition.targets.completed")).Event.Outcome);
-        Assert.Equal("mapped", Assert.Single(Named(events, "definition.mapping.completed")).Event.Outcome);
+        var mapped = Assert.Single(Named(events, "definition.mapping.completed"));
+        Assert.Equal("mapped", mapped.Event.Outcome);
+        Assert.Contains(mapped.Event.Attributes!, a => a.Key == "mappedUnknownTargets" && a.Value == "1");
 
         var request = Assert.Single(Named(events, "request.completed"));
         Assert.Equal("success", request.Event.Outcome);
@@ -166,6 +168,45 @@ public class DefinitionObservabilityTests : IDisposable
         // The stage spans share the request operation id as their parent.
         Assert.Equal(request.Event.OperationId, lookup.Event.ParentOperationId);
 
+        AssertCatalogClean();
+    }
+
+
+    [Fact]
+    public async Task PackageSourceF12_ReportsStructuredMappingWithoutCapturingPackageIdentity()
+    {
+        await StartAsync();
+        await OpenAsync("a.cvl");
+        var target = DocumentUri.Create(_workspace.PathOf("b.cvl"));
+        const string source = "namespace External; public int PackageAdd(int a) { return a; }\\n";
+        int selectionStart = source.IndexOf("PackageAdd", StringComparison.Ordinal);
+        _backend.CannedSymbol = Symbol();
+        _backend.CannedDefinitions = new BackendDefinitionResult(
+            new Dictionary<DocumentUri, string> { [target] = source },
+            [new BackendDefinitionTarget(
+                target, new TextSpan(selectionStart, 10), new TextSpan(selectionStart, 10),
+                BackendDefinitionSourceKind.PackageSource,
+                PackageId: "PRIVATE-PACKAGE-NAME",
+                PackageVersion: "PRIVATE-PACKAGE-VERSION")]);
+
+        Location[]? result = await _session.Client.DefinitionAsync(Uri("a.cvl"), 0, 4)
+            .WithTimeout("package source definition");
+        var location = Assert.Single(Assert.IsType<Location[]>(result));
+        Assert.Equal(new Uri(target.LocalPath), location.Uri);
+        Assert.Equal(0, location.Range.Start.Line);
+        Assert.Equal(selectionStart, location.Range.Start.Character);
+        Assert.Equal(selectionStart + 10, location.Range.End.Character);
+
+        var events = Drain();
+        var mapped = Assert.Single(Named(events, "definition.mapping.completed"));
+        Assert.Equal("mapped", mapped.Event.Outcome);
+        Assert.Contains(mapped.Event.Attributes!, a => a.Key == "targets" && a.Value == "1");
+        Assert.Contains(mapped.Event.Attributes!, a => a.Key == "mappedPackageTargets" && a.Value == "1");
+        Assert.Contains(mapped.Event.Attributes!, a => a.Key == "mappedDocumentTargets" && a.Value == "0");
+        Assert.Contains(mapped.Event.Attributes!, a => a.Key == "rejectedPackageTargets" && a.Value == "0");
+        Assert.Equal("success", Assert.Single(Named(events, "request.completed")).Event.Outcome);
+        Assert.DoesNotContain(events, e => e.Event.Attributes?.Any(a =>
+            a.Value.Contains("PRIVATE-PACKAGE", StringComparison.Ordinal)) == true);
         AssertCatalogClean();
     }
 
@@ -269,7 +310,8 @@ public class DefinitionObservabilityTests : IDisposable
         // text. The LSP must not call this an unresolved symbol or invalid span.
         _backend.CannedDefinitions = new BackendDefinitionResult(
             new Dictionary<DocumentUri, string>(),
-            [new BackendDefinitionTarget(targetUri, new TextSpan(0, 3), new TextSpan(0, 3))]);
+            [new BackendDefinitionTarget(targetUri, new TextSpan(0, 3), new TextSpan(0, 3),
+                BackendDefinitionSourceKind.PackageSource, "PrivateId", "7.4.3")]);
 
         Assert.Null(await _session.Client.DefinitionAsync(Uri("a.cvl"), 0, 4)
             .WithTimeout("missing target source"));
@@ -279,7 +321,10 @@ public class DefinitionObservabilityTests : IDisposable
         Assert.Equal("found", Assert.Single(Named(events, "definition.targets.completed")).Event.Outcome);
         var rejected = Assert.Single(Named(events, "definition.mapping.rejected"));
         Assert.Equal("target_not_captured", rejected.Event.Reason);
-        Assert.Equal("rejected", Assert.Single(Named(events, "definition.mapping.completed")).Event.Outcome);
+        var mapping = Assert.Single(Named(events, "definition.mapping.completed"));
+        Assert.Equal("rejected", mapping.Event.Outcome);
+        Assert.Contains(mapping.Event.Attributes!, a => a.Key == "rejectedPackageTargets" && a.Value == "1");
+        Assert.Contains(mapping.Event.Attributes!, a => a.Key == "mappedPackageTargets" && a.Value == "0");
         var terminal = Assert.Single(Named(events, "request.completed"));
         Assert.Equal("not_found", terminal.Event.Outcome);
         Assert.Equal("target_not_captured", terminal.Event.Reason);

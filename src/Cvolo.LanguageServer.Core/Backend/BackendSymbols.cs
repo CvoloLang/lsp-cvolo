@@ -81,10 +81,24 @@ internal sealed record BackendSymbolInfo(
 /// <summary>
 /// One source declaration of a symbol, expressed in the backend's own spans.
 /// </summary>
+/// <summary>
+/// Source provenance supplied by Tooling, not inferred from the URI or filesystem.
+/// Unknown is reserved for backends without trustworthy classification.
+/// </summary>
+internal enum BackendDefinitionSourceKind
+{
+    Unknown,
+    Document,
+    PackageSource,
+}
+
 internal sealed record BackendDefinitionTarget(
     DocumentUri Document,
     TextSpan Range,
-    TextSpan SelectionSpan);
+    TextSpan SelectionSpan,
+    BackendDefinitionSourceKind SourceKind = BackendDefinitionSourceKind.Unknown,
+    string? PackageId = null,
+    string? PackageVersion = null);
 
 /// <summary>
 /// The definition locations of a symbol, together with the exact text of every

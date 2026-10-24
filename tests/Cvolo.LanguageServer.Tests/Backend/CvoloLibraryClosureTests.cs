@@ -1,4 +1,5 @@
 using Cvolo.Compiler.Tooling;
+using Cvolo.LanguageServer.Core.Backend;
 using Cvolo.LanguageServer.Core.Documents;
 using Cvolo.LanguageServer.Core.Logging;
 using Cvolo.LanguageServer.Cvolo;
@@ -105,6 +106,14 @@ public class CvoloLibraryClosureTests : IDisposable
         var document = snapshot.Snapshot.GetDocument(definitions[0].DocumentId);
         Assert.True(IsConsole(document));
         Assert.True(File.Exists(document.FilePath));
+        var backendSnapshot = (ToolingBackendSnapshot)_backend.CaptureCurrentSnapshot(project);
+        var symbolInfo = _backend.GetSymbolAtPosition(
+            backendSnapshot, handle, edited.IndexOf("WriteLine", StringComparison.Ordinal));
+        Assert.NotNull(symbolInfo);
+        BackendDefinitionResult resolved = _backend.GetDefinitions(backendSnapshot, symbolInfo!.Symbol);
+        Assert.Contains(resolved.Targets, target =>
+            target.SourceKind == BackendDefinitionSourceKind.Document
+            && target.PackageId is null && target.PackageVersion is null);
     }
 
     [Fact]

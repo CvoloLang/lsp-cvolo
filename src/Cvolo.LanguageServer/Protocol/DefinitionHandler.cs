@@ -176,14 +176,22 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
         var locations = new List<Location>(result.Targets.Count);
         bool rejected = false;
         emptyReason = null;
+        int mappedPackageTargets = 0;
+        int mappedDocumentTargets = 0;
+        int mappedUnknownTargets = 0;
+        int rejectedPackageTargets = 0;
 
         foreach (BackendDefinitionTarget target in result.Targets)
         {
+            // Classification is backend-provided and never based on URI/path
+            // heuristics. Package identity remains in memory, not in JSONL.
+            bool packageSource = target.SourceKind == BackendDefinitionSourceKind.PackageSource;
             if (!result.DocumentTexts.TryGetValue(target.Document, out string? text))
             {
                 logger.Debug($"[definition] skipping target in '{target.Document}' without captured text.");
                 EmitStage(MappingRejectedEvent, "rejected", "target_not_captured", operationId, version);
                 emptyReason ??= "target_not_captured";
+                if (packageSource) rejectedPackageTargets++;
                 rejected = true;
                 continue;
             }
@@ -194,6 +202,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
                 logger.Debug($"[definition] skipping target in '{target.Document}' with an out-of-range selection span.");
                 EmitStage(MappingRejectedEvent, "rejected", "invalid_target_span", operationId, version);
                 emptyReason ??= "invalid_target_span";
+                if (packageSource) rejectedPackageTargets++;
                 rejected = true;
                 continue;
             }
@@ -209,6 +218,7 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
                 logger.Debug($"[definition] skipping target in '{target.Document}' whose selection span cannot be mapped.");
                 EmitStage(MappingRejectedEvent, "rejected", "invalid_target_span", operationId, version);
                 emptyReason ??= "invalid_target_span";
+                if (packageSource) rejectedPackageTargets++;
                 rejected = true;
                 continue;
             }
@@ -217,8 +227,16 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
             {
                 EmitStage(MappingRejectedEvent, "rejected", "target_deduplicated", operationId, version);
                 emptyReason ??= "target_deduplicated";
+                if (packageSource) rejectedPackageTargets++;
                 rejected = true;
                 continue;
+            }
+
+            switch (target.SourceKind)
+            {
+                case BackendDefinitionSourceKind.PackageSource: mappedPackageTargets++; break;
+                case BackendDefinitionSourceKind.Document: mappedDocumentTargets++; break;
+                default: mappedUnknownTargets++; break;
             }
 
             locations.Add(new Location
@@ -233,7 +251,14 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
         }
 
         string mappingOutcome = locations.Count == 0 ? "rejected" : rejected ? "partial" : "mapped";
-        CompleteStage(mapping, mappingOutcome, null);
+        CompleteStage(mapping, mappingOutcome, null,
+        [
+            new("targets", result.Targets.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new("mappedDocumentTargets", mappedDocumentTargets.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new("mappedPackageTargets", mappedPackageTargets.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new("mappedUnknownTargets", mappedUnknownTargets.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new("rejectedPackageTargets", rejectedPackageTargets.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        ]);
 
         return locations.Count == 0 ? null : [.. locations];
     }
@@ -272,12 +297,14 @@ internal sealed class DefinitionHandler(ILspLogger logger, Func<DocumentStore> s
         });
     }
 
-    private static void CompleteStage(IOperationScope scope, string outcome, string? reason)
+    private static void CompleteStage(
+        IOperationScope scope, string outcome, string? reason,
+        IReadOnlyList<KeyValuePair<string, string>>? attributes = null)
     {
         if (ReferenceEquals(scope, NoopOperationScope.Instance))
             return;
 
-        scope.Complete(outcome, reason);
+        scope.Complete(outcome, reason, attributes: attributes);
     }
 
     private static void CompleteRequest(IOperationScope request, string outcome, string? reason)
