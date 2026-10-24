@@ -4,7 +4,7 @@ Generated from `tools/acceptance/inc33-normative-rtm.json` (the source of truth)
 The 68 §45 scenarios plus 19 §65 scenarios are a **complete ID inventory**, NOT completed acceptance.
 A linked test alone establishes only partial coverage. `PASS` requires test/evidence/build/platform provenance and the release gate.
 
-**Inventory:** 87 scenarios · 0 PASS · 25 PARTIAL · 62 BLOCKED · 0 FAIL.
+**Inventory:** 87 scenarios · 0 PASS · 26 PARTIAL · 61 BLOCKED · 0 FAIL.
 
 | Requirement | Section | Component | Status | Existing test links | Scenario | Normative oracle |
 |---|---|---|---|---|---|---|
@@ -44,7 +44,7 @@ A linked test alone establishes only partial coverage. `PASS` requires test/evid
 | OBS-COMP-012 | §45.3 | Compiler/Tooling/CLI | BLOCKED | — | `off`, `basic`, `detailed`, targeted forensic cross-mode | Функциональные выходы, diagnostics, codegen/emit artefacts эквивалентны по oracle; timestamps/trace IDs исключены из сравнения |
 | OBS-COMP-013 | §45.3 | Compiler/Tooling/CLI | BLOCKED | — | Точечный L2 на одном symbol/operation | Candidate details bounded, source content не утёк; соседние операции не получили дорогую L2-нагрузку |
 | OBS-COMP-014 | §45.3 | Compiler/Tooling/CLI | BLOCKED | — | Глубина инструментации coverage | L0 для 100% инвентаризованных API; L1 для обязательного перечня из §31.1; остальное `partial/on_demand`, не `covered` |
-| OBS-LSP-001 | §45.4 | LanguageServer | BLOCKED | — | F12 found within project (integration subprocess) | Клиент получил expected location, trace содержит request/snapshot/symbol/map/send |
+| OBS-LSP-001 | §45.4 | LanguageServer | PARTIAL | `LSP33-LSP-11` | F12 found within project (integration subprocess) | Клиент получил expected location, trace содержит request/snapshot/symbol/map/send |
 | OBS-LSP-002 | §45.4 | LanguageServer | BLOCKED | — | F12 found in package source | Получена ожидаемая source URI+range; package identity/source mapping подтверждены |
 | OBS-LSP-003 | §45.4 | LanguageServer | PARTIAL | `LSP33-LSP-04`, `LSP33-LSP-05`, `LSP33-LSP-06` | F12 unknown symbol / invalid position / missing source / invalid mapped target | Четыре distinct reason branches + response; terminal outcome согласован с branch |
 | OBS-LSP-004 | §45.4 | LanguageServer | PARTIAL | `LSP33-LSP-07`, `LSP33-LSP-08` | Request cancelled before queue / during lazy wait / after cancellation deferred | `cancellation.requested/observed/deferred`, correct response and shared analysis integrity |

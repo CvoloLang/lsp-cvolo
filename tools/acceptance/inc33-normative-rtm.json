@@ -675,15 +675,17 @@
       "description": "F12 found within project (integration subprocess)",
       "coveredMethods": [],
       "eventIds": [],
-      "testIds": [],
-      "testType": "unassigned",
+      "testIds": [
+        "LSP33-LSP-11"
+      ],
+      "testType": "partial_xunit_or_python",
       "oracle": "Клиент получил expected location, trace содержит request/snapshot/symbol/map/send",
       "fixture": null,
       "platform": [],
-      "status": "BLOCKED",
+      "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Actual subprocess definition lookup, correct source location and detailed JSONL stage records have a real fixture test. Complete operation/snapshot/symbol/map/send identity proof, concurrency and reproducible export evidence remain pending."
     },
     {
       "requirementId": "OBS-LSP-002",

@@ -491,6 +491,15 @@
       }
     },
     {
+      "id": "LSP33-LSP-11",
+      "title": "Actual subprocess F12 location and JSONL navigation stage chain",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/EndToEnd/NavigationProcessTests.cs",
+        "method": "Definition_RealProcess_DetailedTraceLinksFoundLocationToNavigationStages"
+      }
+    },
+    {
       "id": "LSP33-GAP-01",
       "title": "Transport frame identity preserved through dispatch and handler",
       "state": "open",
