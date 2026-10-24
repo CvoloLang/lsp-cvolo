@@ -257,41 +257,48 @@ public class SemanticTokensConcurrencyTests : IDisposable
 
         _session.Server.ResetServerFrames();
         _backend.ArmNavigation();
-        Task<JObject?>[] inFlight =
+        // This first request is PROVEN to have entered the old-generation
+        // backend. Requests submitted while it blocks may remain queued and
+        // capture the new version after edits; those cannot be called stale.
+        Task<JObject?> admittedBeforeEdit = _session.Client.SemanticTokensAsync(Uri("a.cvl"));
+        Assert.True(_backend.WaitUntilNavigationEntered(TimeSpan.FromSeconds(5)),
+            "old-version semantic tokens should have entered the backend");
+        Task<JObject?>[] mayStillBeQueued =
         [
             _session.Client.SemanticTokensAsync(Uri("a.cvl")),
             _session.Client.SemanticTokensAsync(Uri("a.cvl")),
-            _session.Client.SemanticTokensAsync(Uri("a.cvl")),
         ];
-        Assert.True(_backend.WaitUntilNavigationEntered(TimeSpan.FromSeconds(5)), "backend semantic tokens should be entered");
-        // One admitted backend call does NOT prove that all 3 requests have
-        // captured the old document version. A later request may legitimately
-        // enter after the edits and succeed, so only classify all 3 as stale
-        // after their old-generation backend work has actually started.
-        await _session.Client.WaitUntilAsync(
-            () => _backend.SemanticTokensCalls >= inFlight.Length,
-            "all pre-edit semantic-token requests entered the backend");
 
-        // The user keeps typing while every request is still in flight.
         for (var version = 2; version <= 4; version++)
         {
             await _session.Client.NotifyDidChangeAsync(
                 Uri("a.cvl"),
                 version,
-                new TextDocumentContentChangeEvent { Text = $"int main() {{ return {version}; }}\n" });
+                new TextDocumentContentChangeEvent { Text = $"int main() {{ return {version}; }}\\n" });
         }
 
-        await _session.Client.WaitUntilAsync(() => _store.TryGet(coreUri, out var state) && state.Version.Value == 4, "a.cvl v4");
+        await _session.Client.WaitUntilAsync(
+            () => _store.TryGet(coreUri, out var state) && state.Version.Value == 4,
+            "a.cvl v4");
         _backend.ReleaseNavigation();
 
-        foreach (Task<JObject?> request in inFlight)
+        RemoteInvocationException stale = await Assert.ThrowsAsync<RemoteInvocationException>(
+            () => admittedBeforeEdit.WithTimeout("admitted stale semantic tokens"));
+        Assert.Equal(ProtocolErrorCodes.ContentModified, (int?)stale.ErrorCode);
+
+        foreach (Task<JObject?> request in mayStillBeQueued)
         {
-            RemoteInvocationException stale = await Assert.ThrowsAsync<RemoteInvocationException>(
-                () => request.WithTimeout("stale semantic tokens"));
-            Assert.Equal(ProtocolErrorCodes.ContentModified, (int?)stale.ErrorCode);
+            try
+            {
+                // May validly succeed if admission happened AFTER the edit.
+                await request.WithTimeout("queued semantic tokens");
+            }
+            catch (RemoteInvocationException error)
+            {
+                Assert.Equal(ProtocolErrorCodes.ContentModified, (int?)error.ErrorCode);
+            }
         }
 
-        // Not one stale answer may surface as a user-visible failure.
         List<JObject> errors = ServerErrors();
         Assert.NotEmpty(errors);
         Assert.All(errors, error => Assert.Equal(ProtocolErrorCodes.ContentModified, (int?)error["code"]));
