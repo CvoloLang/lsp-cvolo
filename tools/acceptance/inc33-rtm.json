@@ -527,6 +527,33 @@
       }
     },
     {
+      "id": "LSP33-LSP-13",
+      "title": "Real subprocess F12 into unopened external SDK source checks location range and correlated JSONL (not .cvlib)",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/EndToEnd/NavigationProcessTests.cs",
+        "method": "Definition_RealProcess_NavigatesIntoClosedSdkSource_WithCorrelatedTrace"
+      }
+    },
+    {
+      "id": "LSP33-LSP-14",
+      "title": "Missing captured target source records target_not_captured in mapping and terminal",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DefinitionObservabilityTests.cs",
+        "method": "UncapturedDefinitionTarget_RecordsMissingSourceAtMappingAndTerminal"
+      }
+    },
+    {
+      "id": "LSP33-LSP-15",
+      "title": "All-invalid F12 target spans keep invalid_target_span terminal reason",
+      "state": "implemented_test",
+      "test": {
+        "path": "tests/Cvolo.LanguageServer.Tests/Protocol/DefinitionObservabilityTests.cs",
+        "method": "AllInvalidDefinitionSpans_KeepInvalidSpanTerminalReason"
+      }
+    },
+    {
       "id": "LSP33-RPC-07",
       "title": "Closed-document hover/completion/signature/references return traced not_found outcomes",
       "state": "implemented_test",

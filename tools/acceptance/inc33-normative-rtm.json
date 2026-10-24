@@ -703,7 +703,7 @@
       "status": "BLOCKED",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Normative scenario not yet linked to sufficient executable tests and evidence. Cannot claim PASS."
+      "knownLimitations": "Real subprocess external SDK F12 was verified on Ubuntu/Windows (CI #40109948988, 4707a69), but SDK is NOT a .cvlib package source. No actual package-source fixture, expected package provenance/source URI/range or packaged-VSIX evidence exists. Normative package case remains BLOCKED."
     },
     {
       "requirementId": "OBS-LSP-003",
@@ -716,7 +716,9 @@
       "testIds": [
         "LSP33-LSP-04",
         "LSP33-LSP-05",
-        "LSP33-LSP-06"
+        "LSP33-LSP-06",
+        "LSP33-LSP-14",
+        "LSP33-LSP-15"
       ],
       "testType": "partial_xunit_or_python",
       "oracle": "Четыре distinct reason branches + response; terminal outcome согласован с branch",
@@ -725,7 +727,7 @@
       "status": "PARTIAL",
       "evidencePath": null,
       "buildSha": null,
-      "knownLimitations": "Tests cover unknown symbol, invalid position, and malformed mapped target through an in-process LSP session. Missing package source and full four-branch subprocess oracle remain unverified."
+      "knownLimitations": "CI #40110313286 on 7fb07e0 (Ubuntu/Windows): in-process F12 now independently distinguishes unresolved_symbol/symbol_lookup_miss, invalid_position, target_not_captured, and invalid_target_span at mapping and terminal. Real subprocess full four-branch oracle, package-source identity and offline bundle causal evidence remain pending."
     },
     {
       "requirementId": "OBS-LSP-004",
